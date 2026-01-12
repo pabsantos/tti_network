@@ -1,0 +1,19 @@
+Global Network Parameters
+==================================================
+
+Number of nodes (N): 680
+Number of edges (L): 1175
+
+Average Parameters:
+--------------------------------------------------
+Average degree (<k>): 3.4559
+Average clustering coefficient (<c>): 0.0668
+Average edge length (<l>): 88.5479
+Average shortest path length: 13.9115
+
+Maximum Parameters:
+--------------------------------------------------
+Maximum degree (k*): 7
+Maximum clustering coefficient (c*): 1.0000
+Maximum edge length (l*): 866.2441
+Diameter (D): 31
