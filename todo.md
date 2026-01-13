@@ -10,20 +10,21 @@
 
 - [x] Calc parameters
 
-    - [ ] N: number of nodes
-    - [ ] L: number of edges
-    - [ ] k_i: degree of node i
-    - [ ] c_i: clustering coefficient of node i
-    - [ ] l_ij: length or distance of the edge between nodes i and j
-    - [ ] e_ij: edge betweenness
-    - [ ] <l>_i: average length of edges connected to node i
-    - [ ] b_i: betweenness centrality of node i
-    - [ ] v_i: closeness centrality of node i
-    - [ ] D: diameter of the graph
-    - [ ] <k>: average degree of nodes
-    - [ ] <c>: average clustering coefficient
+    - [x] N: number of nodes
+    - [x] L: number of edges
+    - [x] k_i: degree of node i
+    - [x] c_i: clustering coefficient of node i
+    - [ ] l_ij: length or distance of the edge between nodes i and j (topological, euclidian and manhattan)
+    - [x] e_ij: edge betweenness
+    - [ ] <l>_i: average length of edges connected to node i (topological, euclidian and manhattan)
+    - [x] b_i: betweenness centrality of node i
+    - [ ] v_i: vulnerability of node i
+    - [ ] v_ij: vulnerability of edge ij
+    - [x] D: diameter of the graph
+    - [x] <k>: average degree of nodes
+    - [x] <c>: average clustering coefficient
     - [ ] <l>: average path length
-    - [ ] k*: maximum degree in the graph
+    - [ ] k*: theoretical degree in the graph
     - [ ] c*: maximum clustering coefficient
     - [ ] l*: maximum path length
 

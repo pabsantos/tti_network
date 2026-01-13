@@ -149,6 +149,19 @@ def plot_graph(graph: nx.MultiDiGraph):
     logging.info("Graph plotted successfully")
 
 
+def calculate_global_efficiency(graph: nx.MultiDiGraph) -> float:
+    """Calculate global efficiency of the network.
+
+    Args:
+        graph: NetworkX MultiDiGraph.
+
+    Returns:
+        Global efficiency value.
+    """
+    undirected = graph.to_undirected()
+    return nx.global_efficiency(undirected)
+
+
 def calculate_node_parameters(graph: nx.MultiDiGraph) -> pd.DataFrame:
     """Calculate local parameters for each node in the graph.
 
@@ -170,9 +183,6 @@ def calculate_node_parameters(graph: nx.MultiDiGraph) -> pd.DataFrame:
     logging.info("Computing betweenness centrality for each node...")
     betweenness = nx.betweenness_centrality(graph)
 
-    logging.info("Computing closeness centrality for each node...")
-    closeness = nx.closeness_centrality(graph)
-
     logging.info("Computing average edge length for each node...")
     avg_edge_length = {}
     for node in graph.nodes():
@@ -180,13 +190,32 @@ def calculate_node_parameters(graph: nx.MultiDiGraph) -> pd.DataFrame:
         lengths = [data.get("length", 0) for _, _, data in edges]
         avg_edge_length[node] = sum(lengths) / len(lengths) if lengths else 0
 
+    logging.info("Computing node vulnerability based on efficiency...")
+    base_efficiency = calculate_global_efficiency(graph)
+    logging.info(f"Base global efficiency: {base_efficiency:.6f}")
+
+    vulnerability = {}
+    nodes_list = list(graph.nodes())
+    for i, node in enumerate(nodes_list, 1):
+        if i % 100 == 0 or i == len(nodes_list):
+            logging.info(f"Computing vulnerability for node {i}/{len(nodes_list)}")
+
+        graph_copy = graph.copy()
+        graph_copy.remove_node(node)
+
+        if len(graph_copy.nodes()) > 0:
+            efficiency_without = calculate_global_efficiency(graph_copy)
+            vulnerability[node] = (base_efficiency - efficiency_without) / base_efficiency if base_efficiency > 0 else 0
+        else:
+            vulnerability[node] = 0
+
     node_data = pd.DataFrame(
         {
             "node": list(graph.nodes()),
             "k_i": [degree[n] for n in graph.nodes()],
             "c_i": [clustering[n] for n in graph.nodes()],
             "b_i": [betweenness[n] for n in graph.nodes()],
-            "v_i": [closeness[n] for n in graph.nodes()],
+            "v_i": [vulnerability[n] for n in graph.nodes()],
             "avg_l_i": [avg_edge_length[n] for n in graph.nodes()],
         }
     )
@@ -202,15 +231,33 @@ def calculate_edge_parameters(graph: nx.MultiDiGraph) -> pd.DataFrame:
         graph: NetworkX MultiDiGraph.
 
     Returns:
-        DataFrame with edge parameters (l_ij, e_ij).
+        DataFrame with edge parameters (l_ij, e_ij, v_ij).
     """
     logging.info("Calculating edge parameters...")
 
     logging.info("Computing edge betweenness centrality...")
     edge_betweenness = nx.edge_betweenness_centrality(graph)
 
+    logging.info("Computing edge vulnerability based on efficiency...")
+    base_efficiency = calculate_global_efficiency(graph)
+    logging.info(f"Base global efficiency: {base_efficiency:.6f}")
+
     edges_data = []
-    for u, v, key, data in graph.edges(keys=True, data=True):
+    edges_list = list(graph.edges(keys=True, data=True))
+
+    for i, (u, v, key, data) in enumerate(edges_list, 1):
+        if i % 200 == 0 or i == len(edges_list):
+            logging.info(f"Computing vulnerability for edge {i}/{len(edges_list)}")
+
+        graph_copy = graph.copy()
+        graph_copy.remove_edge(u, v, key)
+
+        if len(graph_copy.nodes()) > 0:
+            efficiency_without = calculate_global_efficiency(graph_copy)
+            edge_vulnerability = (base_efficiency - efficiency_without) / base_efficiency if base_efficiency > 0 else 0
+        else:
+            edge_vulnerability = 0
+
         edges_data.append(
             {
                 "u": u,
@@ -218,6 +265,7 @@ def calculate_edge_parameters(graph: nx.MultiDiGraph) -> pd.DataFrame:
                 "key": key,
                 "l_ij": data.get("length", 0),
                 "e_ij": edge_betweenness.get((u, v, key), 0),
+                "v_ij": edge_vulnerability,
             }
         )
 
@@ -251,6 +299,8 @@ def calculate_global_parameters(
     max_degree = node_data["k_i"].max()
     max_clustering = node_data["c_i"].max()
     max_edge_length = edge_data["l_ij"].max()
+    max_node_vulnerability = node_data["v_i"].max()
+    max_edge_vulnerability = edge_data["v_ij"].max()
 
     largest_cc = max(nx.weakly_connected_components(graph), key=len)
     subgraph = graph.subgraph(largest_cc)
@@ -278,6 +328,8 @@ def calculate_global_parameters(
         "max_k": max_degree,
         "max_c": max_clustering,
         "max_l": max_edge_length,
+        "max_v_node": max_node_vulnerability,
+        "max_v_edge": max_edge_vulnerability,
         "diameter_D": diameter,
         "avg_shortest_path": avg_shortest_path,
     }
@@ -313,6 +365,7 @@ def add_parameters_to_graph(
         u, v, key = row["u"], row["v"], int(row["key"])
         if graph.has_edge(u, v, key):
             graph.edges[u, v, key]["e_ij"] = float(row["e_ij"])
+            graph.edges[u, v, key]["v_ij"] = float(row["v_ij"])
 
     logging.info("Parameters added to graph")
     return graph
@@ -368,6 +421,8 @@ def save_results_txt(global_params: dict, output_path: Path):
         f.write("Maximum degree (k*): {}\n".format(global_params["max_k"]))
         f.write("Maximum clustering coefficient (c*): {:.4f}\n".format(global_params["max_c"]))
         f.write("Maximum edge length (l*): {:.4f}\n".format(global_params["max_l"]))
+        f.write("Maximum node vulnerability (v*): {:.6f}\n".format(global_params["max_v_node"]))
+        f.write("Maximum edge vulnerability (v_edge*): {:.6f}\n".format(global_params["max_v_edge"]))
         if global_params["diameter_D"] is not None:
             f.write("Diameter (D): {}\n".format(global_params["diameter_D"]))
         else:
