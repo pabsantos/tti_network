@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  tti-network:
+    build: .
+    image: tti-network:latest
+    volumes:
+      - ./data/raw:/app/data/raw:ro
+      - ./data/output:/app/data/output
+      - ./data/test:/app/data/test
+      - ./cache:/app/cache
+    environment:
+      - PYTHONUNBUFFERED=1

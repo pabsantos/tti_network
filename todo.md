@@ -31,6 +31,6 @@
 
 - [x] Export network with local parameters (edges + nodes)
 
-- [ ] Build container
+- [x] Build container
 
  
