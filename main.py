@@ -163,16 +163,14 @@ def calculate_global_efficiency(graph: nx.MultiDiGraph) -> float:
     return nx.global_efficiency(undirected)
 
 
-def calculate_node_parameters(
-    graph: nx.MultiDiGraph, compute_vulnerability: bool = True
-) -> pd.DataFrame:
+def calculate_node_parameters(graph: nx.MultiDiGraph) -> pd.DataFrame:
     """Calculate local parameters for each node in the graph.
 
     Args:
         graph: NetworkX MultiDiGraph.
 
     Returns:
-        DataFrame with node parameters (k_i, c_i, b_i, v_i, avg_l_i).
+        DataFrame with node parameters (k_i, c_i, b_i, avg_l_i).
     """
     logging.info("Calculating node parameters...")
 
@@ -193,40 +191,12 @@ def calculate_node_parameters(
         lengths = [data.get("length", 0) for _, _, data in edges]
         avg_edge_length[node] = sum(lengths) / len(lengths) if lengths else 0
 
-    if compute_vulnerability:
-        logging.info("Computing node vulnerability based on efficiency...")
-        base_efficiency = calculate_global_efficiency(graph)
-        logging.info(f"Base global efficiency: {base_efficiency:.6f}")
-
-        vulnerability = {}
-        nodes_list = list(graph.nodes())
-        for i, node in enumerate(nodes_list, 1):
-            if i % 100 == 0 or i == len(nodes_list):
-                logging.info(f"Computing vulnerability for node {i}/{len(nodes_list)}")
-
-            graph_copy = graph.copy()
-            graph_copy.remove_node(node)
-
-            if len(graph_copy.nodes()) > 0:
-                efficiency_without = calculate_global_efficiency(graph_copy)
-                vulnerability[node] = (
-                    (base_efficiency - efficiency_without) / base_efficiency
-                    if base_efficiency > 0
-                    else 0
-                )
-            else:
-                vulnerability[node] = 0
-    else:
-        logging.info("Skipping node vulnerability calculation (disabled for test run)")
-        vulnerability = {n: 0.0 for n in graph.nodes()}
-
     node_data = pd.DataFrame(
         {
             "node": list(graph.nodes()),
             "k_i": [degree[n] for n in graph.nodes()],
             "c_i": [clustering[n] for n in graph.nodes()],
             "b_i": [betweenness[n] for n in graph.nodes()],
-            "v_i": [vulnerability[n] for n in graph.nodes()],
             "avg_l_i": [avg_edge_length[n] for n in graph.nodes()],
         }
     )
@@ -370,7 +340,6 @@ def calculate_global_parameters(
     max_l_eucl = edge_data["l_eucl"].max()
     max_l_manh = edge_data["l_manh"].max()
     max_length = edge_data["length"].max()
-    max_node_vulnerability = node_data["v_i"].max()
     max_edge_vulnerability = edge_data["v_ij"].max()
 
     largest_cc = max(nx.weakly_connected_components(graph), key=len)
@@ -444,7 +413,6 @@ def calculate_global_parameters(
         "max_l_eucl": max_l_eucl,
         "max_l_manh": max_l_manh,
         "max_length": max_length,
-        "max_v_node": max_node_vulnerability,
         "max_v_edge": max_edge_vulnerability,
         "diameter_D": diameter,
         "avg_shortest_path_topo": avg_shortest_path_topo,
@@ -477,7 +445,6 @@ def add_parameters_to_graph(
         graph.nodes[node]["k_i"] = int(row["k_i"])
         graph.nodes[node]["c_i"] = float(row["c_i"])
         graph.nodes[node]["b_i"] = float(row["b_i"])
-        graph.nodes[node]["v_i"] = float(row["v_i"])
         graph.nodes[node]["avg_l_i"] = float(row["avg_l_i"])
 
     for _, row in edge_data.iterrows():
@@ -633,11 +600,6 @@ def save_results_txt(global_params: dict, output_path: Path):
             )
         )
         f.write(
-            "Maximum node vulnerability (v*): {:.6f}\n".format(
-                global_params["max_v_node"]
-            )
-        )
-        f.write(
             "Maximum edge vulnerability (v_edge*): {:.6f}\n".format(
                 global_params["max_v_edge"]
             )
@@ -682,7 +644,7 @@ def main():
     # plot_graph(graph)
 
     compute_vuln = not TEST_RUN
-    node_params = calculate_node_parameters(graph, compute_vulnerability=compute_vuln)
+    node_params = calculate_node_parameters(graph)
     edge_params = calculate_edge_parameters(graph, compute_vulnerability=compute_vuln)
 
     # Add parameters to graph BEFORE calculating global parameters
