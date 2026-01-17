@@ -11,5 +11,5 @@ wheels/
 # CLAUDE.md
 .claude/
 cache/
-output/test/
+data/test/*
 
