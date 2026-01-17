@@ -165,6 +165,19 @@ def calculate_global_efficiency(graph: nx.MultiDiGraph) -> float:
     return nx.global_efficiency(undirected)
 
 
+def _compute_betweenness_subset(graph: nx.MultiDiGraph, sources: list) -> dict:
+    """Compute betweenness centrality contribution from a subset of source nodes.
+
+    Args:
+        graph: NetworkX MultiDiGraph.
+        sources: List of source nodes to compute from.
+
+    Returns:
+        Dictionary with partial betweenness values for all nodes.
+    """
+    return nx.betweenness_centrality_subset(graph, sources=sources, targets=list(graph.nodes()))
+
+
 def calculate_node_parameters(graph: nx.MultiDiGraph) -> pd.DataFrame:
     """Calculate local parameters for each node in the graph.
 
@@ -183,8 +196,22 @@ def calculate_node_parameters(graph: nx.MultiDiGraph) -> pd.DataFrame:
     simple_graph = nx.Graph(graph.to_undirected())
     clustering = nx.clustering(simple_graph)
 
-    logging.info("Computing betweenness centrality for each node...")
-    betweenness = nx.betweenness_centrality(graph)
+    logging.info("Computing betweenness centrality for each node (parallel)...")
+    nodes = list(graph.nodes())
+    n_jobs = os.cpu_count() or 8
+    logging.info(f"Using {n_jobs} CPU cores for parallel betweenness computation")
+
+    chunk_size = max(1, len(nodes) // n_jobs)
+    node_chunks = [nodes[i:i + chunk_size] for i in range(0, len(nodes), chunk_size)]
+
+    partial_betweenness = Parallel(n_jobs=n_jobs, verbose=10)(
+        delayed(_compute_betweenness_subset)(graph, chunk) for chunk in node_chunks
+    )
+
+    betweenness = {node: 0.0 for node in nodes}
+    for partial in partial_betweenness:
+        for node, value in partial.items():
+            betweenness[node] += value
 
     logging.info("Computing average edge length for each node...")
     avg_edge_length = {}
