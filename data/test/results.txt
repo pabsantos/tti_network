@@ -28,6 +28,5 @@ Maximum topological distance (l_topo*): 1 edges
 Maximum Euclidean distance (l_eucl*): 837.5654 m
 Maximum Manhattan distance (l_manh*): 1021.6079 m
 Maximum physical length (length*): 866.2441 m
-Maximum node vulnerability (v*): 0.000000
-Maximum edge vulnerability (v_edge*): 0.000000
+Maximum edge vulnerability (v_edge*): 0.028079
 Diameter (D): 31

@@ -7,9 +7,10 @@ Geospatial network analysis project for the Tamanduateí basin (TTI). This proje
 - Load and filter origin-destination (OD) zones that intersect with the Tamanduateí basin
 - Download road network data from OpenStreetMap using OSMnx
 - Calculate network parameters:
-  - Node parameters: degree, clustering coefficient, betweenness centrality, closeness centrality, average edge length
-  - Edge parameters: length, edge betweenness centrality
+  - Node parameters: degree, clustering coefficient, betweenness centrality, average edge length
+  - Edge parameters: topological/euclidean/manhattan distances, physical length, edge betweenness centrality, vulnerability
   - Global parameters: network size, averages, maximums, diameter, shortest paths
+- Parallel computation of edge vulnerability using all CPU cores (optimized for Apple M1)
 - Export results in multiple formats (GeoPackage, GraphML, text)
 
 ## Requirements
@@ -111,21 +112,21 @@ The docker-compose configuration mounts the following volumes:
 - `k_i`: Degree of node i
 - `c_i`: Clustering coefficient of node i
 - `b_i`: Betweenness centrality of node i
-- `v_i`: Closeness centrality of node i
 - `avg_l_i`: Average length of edges connected to node i
 
 ### Edge Parameters
-- `l_ij`: Length/distance of edge between nodes i and j
+- `l_topo`: Topological distance (number of edges in shortest path)
+- `l_eucl`: Euclidean distance (geodesic straight-line)
+- `l_manh`: Manhattan distance
+- `length`: Physical road length in meters
 - `e_ij`: Edge betweenness centrality
+- `v_ij`: Edge vulnerability (efficiency drop when edge is removed)
 
 ### Global Parameters
 - `N`: Number of nodes
 - `L`: Number of edges
 - `<k>`: Average degree
 - `<c>`: Average clustering coefficient
-- `<l>`: Average edge length
-- `k*`: Maximum degree
-- `c*`: Maximum clustering coefficient
-- `l*`: Maximum edge length
+- `<l_topo>`, `<l_eucl>`, `<l_manh>`, `<length>`: Average distances
 - `D`: Network diameter
-- Average shortest path length
+- Average shortest path lengths (topological, physical, euclidean, manhattan)

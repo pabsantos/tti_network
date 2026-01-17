@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 
 import geopandas as gpd
@@ -6,6 +7,7 @@ import networkx as nx
 import osmnx as ox
 import pandas as pd
 import pyproj
+from joblib import Parallel, delayed
 
 
 def setup_logging():
@@ -205,6 +207,34 @@ def calculate_node_parameters(graph: nx.MultiDiGraph) -> pd.DataFrame:
     return node_data
 
 
+def _compute_single_edge_vulnerability(
+    graph: nx.MultiDiGraph, u, v, key, base_efficiency: float
+) -> float:
+    """Compute vulnerability for a single edge by removing it and measuring efficiency drop.
+
+    Args:
+        graph: NetworkX MultiDiGraph.
+        u: Source node.
+        v: Target node.
+        key: Edge key.
+        base_efficiency: Base global efficiency of the complete graph.
+
+    Returns:
+        Vulnerability value for the edge.
+    """
+    graph_copy = graph.copy()
+    graph_copy.remove_edge(u, v, key)
+
+    if len(graph_copy.nodes()) > 0:
+        efficiency_without = calculate_global_efficiency(graph_copy)
+        return (
+            (base_efficiency - efficiency_without) / base_efficiency
+            if base_efficiency > 0
+            else 0
+        )
+    return 0
+
+
 def calculate_edge_parameters(
     graph: nx.MultiDiGraph, compute_vulnerability: bool = True
 ) -> pd.DataFrame:
@@ -212,6 +242,7 @@ def calculate_edge_parameters(
 
     Args:
         graph: NetworkX MultiDiGraph.
+        compute_vulnerability: Whether to compute edge vulnerability (expensive).
 
     Returns:
         DataFrame with edge parameters (l_topo, l_eucl, l_manh, length, e_ij, v_ij).
@@ -222,73 +253,56 @@ def calculate_edge_parameters(
     edge_betweenness = nx.edge_betweenness_centrality(graph)
 
     logging.info("Computing shortest path lengths for topological distance...")
-    # Create undirected version for shortest path calculations
     undirected = graph.to_undirected()
+
+    edges_list = list(graph.edges(keys=True, data=True))
+    n_edges = len(edges_list)
+
+    if compute_vulnerability:
+        logging.info("Computing edge vulnerability based on efficiency (parallel)...")
+        base_efficiency = calculate_global_efficiency(graph)
+        logging.info(f"Base global efficiency: {base_efficiency:.6f}")
+
+        n_jobs = os.cpu_count() or 8
+        logging.info(f"Using {n_jobs} CPU cores for parallel vulnerability computation")
+
+        vulnerabilities = Parallel(n_jobs=n_jobs, verbose=10)(
+            delayed(_compute_single_edge_vulnerability)(graph, u, v, key, base_efficiency)
+            for u, v, key, _ in edges_list
+        )
+        logging.info("Parallel vulnerability computation completed")
+    else:
+        logging.info("Skipping edge vulnerability calculation (disabled for test run)")
+        vulnerabilities = [0.0] * n_edges
 
     logging.info("Computing distance metrics for edges...")
     edges_data = []
-    edges_list = list(graph.edges(keys=True, data=True))
+    geod = pyproj.Geod(ellps="WGS84")
 
-    if compute_vulnerability:
-        logging.info("Computing edge vulnerability based on efficiency...")
-        base_efficiency = calculate_global_efficiency(graph)
-        logging.info(f"Base global efficiency: {base_efficiency:.6f}")
-    else:
-        logging.info("Skipping edge vulnerability calculation (disabled for test run)")
-        base_efficiency = None
+    for i, ((u, v, key, data), vuln) in enumerate(zip(edges_list, vulnerabilities), 1):
+        if i % 500 == 0 or i == n_edges:
+            logging.info(f"Processing edge metrics {i}/{n_edges}")
 
-    for i, (u, v, key, data) in enumerate(edges_list, 1):
-        if i % 200 == 0 or i == len(edges_list):
-            logging.info(f"Processing edge {i}/{len(edges_list)}")
-
-        # Get node coordinates
         u_node = graph.nodes[u]
         v_node = graph.nodes[v]
         u_x, u_y = u_node.get("x"), u_node.get("y")
         v_x, v_y = v_node.get("x"), v_node.get("y")
 
-        # Topological distance (shortest path length in number of edges)
         try:
             l_topo = nx.shortest_path_length(undirected, source=u, target=v)
         except nx.NetworkXNoPath:
             l_topo = float("inf")
 
-        # Physical length (actual road network distance in meters)
         length = data.get("length", 0)
 
-        # Euclidean distance (straight-line) and Manhattan distance
         if u_x is not None and u_y is not None and v_x is not None and v_y is not None:
-            # Use WGS84 ellipsoid for accurate distance calculations
-            geod = pyproj.Geod(ellps="WGS84")
-
-            # Euclidean distance (geodesic straight-line distance)
             _, _, l_eucl = geod.inv(u_x, u_y, v_x, v_y)
-
-            # Manhattan distance (sum of absolute differences)
-            # Convert lat/lon differences to meters
             _, _, dx = geod.inv(u_x, u_y, u_x, v_y)
             _, _, dy = geod.inv(u_x, u_y, v_x, u_y)
             l_manh = abs(dx) + abs(dy)
         else:
             l_eucl = 0
             l_manh = 0
-
-        # Calculate vulnerability for this edge
-        if compute_vulnerability:
-            graph_copy = graph.copy()
-            graph_copy.remove_edge(u, v, key)
-
-            if len(graph_copy.nodes()) > 0:
-                efficiency_without = calculate_global_efficiency(graph_copy)
-                edge_vulnerability = (
-                    (base_efficiency - efficiency_without) / base_efficiency
-                    if base_efficiency > 0
-                    else 0
-                )
-            else:
-                edge_vulnerability = 0
-        else:
-            edge_vulnerability = 0.0
 
         edges_data.append(
             {
@@ -300,7 +314,7 @@ def calculate_edge_parameters(
                 "l_manh": l_manh,
                 "length": length,
                 "e_ij": edge_betweenness.get((u, v, key), 0),
-                "v_ij": edge_vulnerability,
+                "v_ij": vuln,
             }
         )
 
@@ -643,9 +657,8 @@ def main():
 
     # plot_graph(graph)
 
-    compute_vuln = not TEST_RUN
     node_params = calculate_node_parameters(graph)
-    edge_params = calculate_edge_parameters(graph, compute_vulnerability=compute_vuln)
+    edge_params = calculate_edge_parameters(graph)
 
     # Add parameters to graph BEFORE calculating global parameters
     # so that edge attributes are available for weighted shortest paths
