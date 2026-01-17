@@ -266,6 +266,42 @@ def calculate_node_parameters(
     return node_data
 
 
+def _compute_edge_betweenness_networkit(graph: nx.MultiDiGraph) -> dict:
+    """Compute edge betweenness centrality using NetworKit (faster than NetworkX).
+
+    Args:
+        graph: NetworkX MultiDiGraph.
+
+    Returns:
+        Dictionary mapping (u, v) tuples to edge betweenness centrality values.
+    """
+    node_list = list(graph.nodes())
+    node_to_idx = {node: idx for idx, node in enumerate(node_list)}
+    idx_to_node = {idx: node for node, idx in node_to_idx.items()}
+
+    nk_graph = nk.Graph(len(node_list), directed=True)
+    edge_map = {}
+
+    for u, v in graph.edges():
+        u_idx, v_idx = node_to_idx[u], node_to_idx[v]
+        if not nk_graph.hasEdge(u_idx, v_idx):
+            nk_graph.addEdge(u_idx, v_idx)
+        edge_map[(u_idx, v_idx)] = (u, v)
+
+    nk_graph.indexEdges()
+    bc = nk.centrality.Betweenness(nk_graph, normalized=True, computeEdgeCentrality=True)
+    bc.run()
+
+    edge_scores = bc.edgeScores()
+    result = {}
+    for u_idx, v_idx in edge_map:
+        edge_id = nk_graph.edgeId(u_idx, v_idx)
+        u, v = idx_to_node[u_idx], idx_to_node[v_idx]
+        result[(u, v)] = edge_scores[edge_id]
+
+    return result
+
+
 def _compute_single_edge_vulnerability(
     graph: nx.MultiDiGraph, u, v, key, base_efficiency: float
 ) -> float:
@@ -295,21 +331,30 @@ def _compute_single_edge_vulnerability(
 
 
 def calculate_edge_parameters(
-    graph: nx.MultiDiGraph, compute_vulnerability: bool = True
+    graph: nx.MultiDiGraph, compute_vulnerability: bool = True, use_networkit: bool = True
 ) -> pd.DataFrame:
     """Calculate parameters for each edge in the graph.
 
     Args:
         graph: NetworkX MultiDiGraph.
         compute_vulnerability: Whether to compute edge vulnerability (expensive).
+        use_networkit: Use NetworKit for edge betweenness (faster).
 
     Returns:
         DataFrame with edge parameters (l_topo, l_eucl, l_manh, length, e_ij, v_ij).
     """
     logging.info("Calculating edge parameters...")
 
-    logging.info("Computing edge betweenness centrality...")
-    edge_betweenness = nx.edge_betweenness_centrality(graph)
+    if use_networkit:
+        logging.info("Computing edge betweenness centrality using NetworKit...")
+        edge_betweenness_raw = _compute_edge_betweenness_networkit(graph)
+        edge_betweenness = {}
+        for u, v, key in graph.edges(keys=True):
+            edge_betweenness[(u, v, key)] = edge_betweenness_raw.get((u, v), 0)
+        logging.info("NetworKit edge betweenness computation completed")
+    else:
+        logging.info("Computing edge betweenness centrality using NetworkX...")
+        edge_betweenness = nx.edge_betweenness_centrality(graph)
 
     logging.info("Computing shortest path lengths for topological distance...")
     undirected = graph.to_undirected()
