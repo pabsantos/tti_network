@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 import geopandas as gpd
+import networkit as nk
 import networkx as nx
 import osmnx as ox
 import pandas as pd
@@ -165,6 +166,29 @@ def calculate_global_efficiency(graph: nx.MultiDiGraph) -> float:
     return nx.global_efficiency(undirected)
 
 
+def _compute_betweenness_networkit(graph: nx.MultiDiGraph) -> dict:
+    """Compute betweenness centrality using NetworKit (faster than NetworkX).
+
+    Args:
+        graph: NetworkX MultiDiGraph.
+
+    Returns:
+        Dictionary mapping node IDs to betweenness centrality values.
+    """
+    node_list = list(graph.nodes())
+    node_to_idx = {node: idx for idx, node in enumerate(node_list)}
+
+    nk_graph = nk.Graph(len(node_list), directed=True)
+    for u, v in graph.edges():
+        nk_graph.addEdge(node_to_idx[u], node_to_idx[v])
+
+    bc = nk.centrality.Betweenness(nk_graph, normalized=True)
+    bc.run()
+    scores = bc.scores()
+
+    return {node: scores[node_to_idx[node]] for node in node_list}
+
+
 def _compute_betweenness_subset(graph: nx.MultiDiGraph, sources: list) -> dict:
     """Compute betweenness centrality contribution from a subset of source nodes.
 
@@ -178,11 +202,14 @@ def _compute_betweenness_subset(graph: nx.MultiDiGraph, sources: list) -> dict:
     return nx.betweenness_centrality_subset(graph, sources=sources, targets=list(graph.nodes()))
 
 
-def calculate_node_parameters(graph: nx.MultiDiGraph) -> pd.DataFrame:
+def calculate_node_parameters(
+    graph: nx.MultiDiGraph, use_networkit: bool = True
+) -> pd.DataFrame:
     """Calculate local parameters for each node in the graph.
 
     Args:
         graph: NetworkX MultiDiGraph.
+        use_networkit: Use NetworKit for betweenness (faster). Falls back to parallel NetworkX if False.
 
     Returns:
         DataFrame with node parameters (k_i, c_i, b_i, avg_l_i).
@@ -196,22 +223,27 @@ def calculate_node_parameters(graph: nx.MultiDiGraph) -> pd.DataFrame:
     simple_graph = nx.Graph(graph.to_undirected())
     clustering = nx.clustering(simple_graph)
 
-    logging.info("Computing betweenness centrality for each node (parallel)...")
-    nodes = list(graph.nodes())
-    n_jobs = os.cpu_count() or 8
-    logging.info(f"Using {n_jobs} CPU cores for parallel betweenness computation")
+    if use_networkit:
+        logging.info("Computing betweenness centrality using NetworKit...")
+        betweenness = _compute_betweenness_networkit(graph)
+        logging.info("NetworKit betweenness computation completed")
+    else:
+        logging.info("Computing betweenness centrality using NetworkX (parallel)...")
+        nodes = list(graph.nodes())
+        n_jobs = os.cpu_count() or 8
+        logging.info(f"Using {n_jobs} CPU cores for parallel betweenness computation")
 
-    chunk_size = max(1, len(nodes) // n_jobs)
-    node_chunks = [nodes[i:i + chunk_size] for i in range(0, len(nodes), chunk_size)]
+        chunk_size = max(1, len(nodes) // n_jobs)
+        node_chunks = [nodes[i:i + chunk_size] for i in range(0, len(nodes), chunk_size)]
 
-    partial_betweenness = Parallel(n_jobs=n_jobs, verbose=10)(
-        delayed(_compute_betweenness_subset)(graph, chunk) for chunk in node_chunks
-    )
+        partial_betweenness = Parallel(n_jobs=n_jobs, verbose=10)(
+            delayed(_compute_betweenness_subset)(graph, chunk) for chunk in node_chunks
+        )
 
-    betweenness = {node: 0.0 for node in nodes}
-    for partial in partial_betweenness:
-        for node, value in partial.items():
-            betweenness[node] += value
+        betweenness = {node: 0.0 for node in nodes}
+        for partial in partial_betweenness:
+            for node, value in partial.items():
+                betweenness[node] += value
 
     logging.info("Computing average edge length for each node...")
     avg_edge_length = {}
