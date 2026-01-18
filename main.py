@@ -208,7 +208,7 @@ def _nx_to_nk_graph(graph: nx.MultiDiGraph) -> tuple[nk.Graph, dict, dict]:
 
 
 def _calculate_efficiency_networkit(nk_graph: nk.Graph) -> float:
-    """Calculate global efficiency using NetworKit.
+    """Calculate global efficiency using NetworKit with memory-efficient BFS.
 
     Args:
         nk_graph: NetworKit Graph.
@@ -220,15 +220,15 @@ def _calculate_efficiency_networkit(nk_graph: nk.Graph) -> float:
     if n <= 1:
         return 0.0
 
-    apsp = nk.distance.APSP(nk_graph)
-    apsp.run()
-
     total_efficiency = 0.0
     for u in range(n):
+        bfs = nk.distance.BFS(nk_graph, u)
+        bfs.run()
+        distances = bfs.getDistances()
         for v in range(n):
             if u != v:
-                dist = apsp.getDistance(u, v)
-                if dist < float("inf") and dist > 0:
+                dist = distances[v]
+                if dist < 1e308 and dist > 0:
                     total_efficiency += 1.0 / dist
 
     return total_efficiency / (n * (n - 1))
@@ -509,11 +509,6 @@ def calculate_edge_parameters(
         logging.info("Skipping edge vulnerability calculation (disabled)")
         vulnerabilities = [0.0] * n_edges
 
-    logging.info("Pre-computing all shortest path distances using NetworKit APSP...")
-    apsp = nk.distance.APSP(nk_graph)
-    apsp.run()
-    logging.info("APSP computation completed")
-
     logging.info("Computing distance metrics for edges...")
     edges_data = []
     geod = pyproj.Geod(ellps="WGS84")
@@ -527,10 +522,7 @@ def calculate_edge_parameters(
         u_x, u_y = u_node.get("x"), u_node.get("y")
         v_x, v_y = v_node.get("x"), v_node.get("y")
 
-        u_idx, v_idx = node_to_idx[u], node_to_idx[v]
-        l_topo = apsp.getDistance(u_idx, v_idx)
-        if l_topo >= 1e308:
-            l_topo = float("inf")
+        l_topo = 1
 
         length = data.get("length", 0)
 
@@ -623,22 +615,23 @@ def calculate_global_parameters(
                 logging.warning("Could not calculate diameter (graph may not be connected)")
 
         try:
-            apsp = nk.distance.APSP(nk_subgraph)
-            apsp.run()
             n = nk_subgraph.numberOfNodes()
             total_dist = 0.0
             count = 0
             for u in range(n):
+                bfs = nk.distance.BFS(nk_subgraph, u)
+                bfs.run()
+                distances = bfs.getDistances()
                 for v in range(u + 1, n):
-                    dist = apsp.getDistance(u, v)
+                    dist = distances[v]
                     if dist < 1e308:
                         total_dist += dist
                         count += 1
             avg_shortest_path_topo = total_dist / count if count > 0 else None
             logging.info("Average shortest path length (topological) calculated")
-        except Exception:
+        except Exception as e:
             avg_shortest_path_topo = None
-            logging.warning("Could not calculate average shortest path length (topological)")
+            logging.warning(f"Could not calculate average shortest path length (topological): {e}")
     else:
         try:
             diameter = nx.diameter(subgraph.to_undirected())
