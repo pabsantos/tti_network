@@ -257,6 +257,31 @@ def _compute_vulnerability_networkit(
     return 0.0
 
 
+def _compute_clustering_networkit(graph: nx.MultiDiGraph) -> dict:
+    """Compute local clustering coefficient using NetworKit (faster than NetworkX).
+
+    Args:
+        graph: NetworkX MultiDiGraph.
+
+    Returns:
+        Dictionary mapping node IDs to clustering coefficient values.
+    """
+    node_list = list(graph.nodes())
+    node_to_idx = {node: idx for idx, node in enumerate(node_list)}
+
+    nk_graph = nk.Graph(len(node_list), directed=False)
+    for u, v in graph.edges():
+        u_idx, v_idx = node_to_idx[u], node_to_idx[v]
+        if not nk_graph.hasEdge(u_idx, v_idx):
+            nk_graph.addEdge(u_idx, v_idx)
+
+    lcc = nk.centrality.LocalClusteringCoefficient(nk_graph)
+    lcc.run()
+    scores = lcc.scores()
+
+    return {node: scores[node_to_idx[node]] for node in node_list}
+
+
 def _compute_betweenness_networkit(graph: nx.MultiDiGraph) -> dict:
     """Compute betweenness centrality using NetworKit (faster than NetworkX).
 
@@ -310,9 +335,14 @@ def calculate_node_parameters(
     logging.info("Computing degree for each node...")
     degree = dict(graph.degree())
 
-    logging.info("Computing clustering coefficient for each node...")
-    simple_graph = nx.Graph(graph.to_undirected())
-    clustering = nx.clustering(simple_graph)
+    if use_networkit:
+        logging.info("Computing clustering coefficient using NetworKit...")
+        clustering = _compute_clustering_networkit(graph)
+        logging.info("NetworKit clustering computation completed")
+    else:
+        logging.info("Computing clustering coefficient using NetworkX...")
+        simple_graph = nx.Graph(graph.to_undirected())
+        clustering = nx.clustering(simple_graph)
 
     if use_networkit:
         logging.info("Computing betweenness centrality using NetworKit...")
@@ -447,17 +477,14 @@ def calculate_edge_parameters(
         logging.info("Computing edge betweenness centrality using NetworkX...")
         edge_betweenness = nx.edge_betweenness_centrality(graph)
 
-    logging.info("Computing shortest path lengths for topological distance...")
-    undirected = graph.to_undirected()
-
     edges_list = list(graph.edges(keys=True, data=True))
     n_edges = len(edges_list)
 
+    logging.info("Converting graph to NetworKit format...")
+    nk_graph, node_to_idx, idx_to_node = _nx_to_nk_graph(graph)
+
     if compute_vulnerability:
         logging.info("Computing edge vulnerability using NetworKit (parallel)...")
-
-        logging.info("Converting graph to NetworKit format...")
-        nk_graph, node_to_idx, idx_to_node = _nx_to_nk_graph(graph)
 
         logging.info("Computing base global efficiency...")
         base_efficiency = _calculate_efficiency_networkit(nk_graph)
@@ -480,6 +507,11 @@ def calculate_edge_parameters(
         logging.info("Skipping edge vulnerability calculation (disabled)")
         vulnerabilities = [0.0] * n_edges
 
+    logging.info("Pre-computing all shortest path distances using NetworKit APSP...")
+    apsp = nk.distance.APSP(nk_graph)
+    apsp.run()
+    logging.info("APSP computation completed")
+
     logging.info("Computing distance metrics for edges...")
     edges_data = []
     geod = pyproj.Geod(ellps="WGS84")
@@ -493,9 +525,9 @@ def calculate_edge_parameters(
         u_x, u_y = u_node.get("x"), u_node.get("y")
         v_x, v_y = v_node.get("x"), v_node.get("y")
 
-        try:
-            l_topo = nx.shortest_path_length(undirected, source=u, target=v)
-        except nx.NetworkXNoPath:
+        u_idx, v_idx = node_to_idx[u], node_to_idx[v]
+        l_topo = apsp.getDistance(u_idx, v_idx)
+        if l_topo >= 1e308:
             l_topo = float("inf")
 
         length = data.get("length", 0)
@@ -529,7 +561,8 @@ def calculate_edge_parameters(
 
 
 def calculate_global_parameters(
-    graph: nx.MultiDiGraph, node_data: pd.DataFrame, edge_data: pd.DataFrame
+    graph: nx.MultiDiGraph, node_data: pd.DataFrame, edge_data: pd.DataFrame,
+    use_networkit: bool = True
 ) -> dict:
     """Calculate global network parameters.
 
@@ -537,6 +570,7 @@ def calculate_global_parameters(
         graph: NetworkX MultiDiGraph.
         node_data: DataFrame with node parameters.
         edge_data: DataFrame with edge parameters.
+        use_networkit: Use NetworKit for diameter and avg shortest path (faster).
 
     Returns:
         Dictionary with global parameters.
@@ -564,28 +598,64 @@ def calculate_global_parameters(
     largest_cc = max(nx.weakly_connected_components(graph), key=len)
     subgraph = graph.subgraph(largest_cc)
 
-    try:
-        diameter = nx.diameter(subgraph.to_undirected())
-        logging.info(
-            f"Diameter calculated on largest connected component with {len(subgraph.nodes())} nodes"
-        )
-    except nx.NetworkXError:
-        diameter = None
-        logging.warning("Could not calculate diameter (graph may not be connected)")
+    if use_networkit:
+        logging.info("Computing diameter and avg shortest path using NetworKit...")
+        nk_subgraph, node_to_idx, _ = _nx_to_nk_graph(subgraph)
 
-    # Calculate average shortest path length using different distance metrics
-    # Create undirected graph for path calculations
+        try:
+            diam = nk.distance.Diameter(nk_subgraph, algo=nk.distance.DiameterAlgo.EXACT)
+            diam.run()
+            diameter = int(diam.getDiameter()[0])
+            logging.info(
+                f"Diameter calculated on largest connected component with {len(subgraph.nodes())} nodes"
+            )
+        except Exception as e:
+            logging.warning(f"NetworKit diameter failed: {e}, falling back to NetworkX")
+            try:
+                diameter = nx.diameter(subgraph.to_undirected())
+                logging.info(
+                    f"Diameter calculated using NetworkX on {len(subgraph.nodes())} nodes"
+                )
+            except nx.NetworkXError:
+                diameter = None
+                logging.warning("Could not calculate diameter (graph may not be connected)")
+
+        try:
+            apsp = nk.distance.APSP(nk_subgraph)
+            apsp.run()
+            n = nk_subgraph.numberOfNodes()
+            total_dist = 0.0
+            count = 0
+            for u in range(n):
+                for v in range(u + 1, n):
+                    dist = apsp.getDistance(u, v)
+                    if dist < 1e308:
+                        total_dist += dist
+                        count += 1
+            avg_shortest_path_topo = total_dist / count if count > 0 else None
+            logging.info("Average shortest path length (topological) calculated")
+        except Exception:
+            avg_shortest_path_topo = None
+            logging.warning("Could not calculate average shortest path length (topological)")
+    else:
+        try:
+            diameter = nx.diameter(subgraph.to_undirected())
+            logging.info(
+                f"Diameter calculated on largest connected component with {len(subgraph.nodes())} nodes"
+            )
+        except nx.NetworkXError:
+            diameter = None
+            logging.warning("Could not calculate diameter (graph may not be connected)")
+
+        undirected_subgraph = graph.to_undirected().subgraph(largest_cc)
+        try:
+            avg_shortest_path_topo = nx.average_shortest_path_length(undirected_subgraph)
+            logging.info("Average shortest path length (topological) calculated")
+        except nx.NetworkXError:
+            avg_shortest_path_topo = None
+            logging.warning("Could not calculate average shortest path length (topological)")
+
     undirected_subgraph = graph.to_undirected().subgraph(largest_cc)
-
-    try:
-        # Topological (number of edges)
-        avg_shortest_path_topo = nx.average_shortest_path_length(undirected_subgraph)
-        logging.info("Average shortest path length (topological) calculated")
-    except nx.NetworkXError:
-        avg_shortest_path_topo = None
-        logging.warning(
-            "Could not calculate average shortest path length (topological)"
-        )
 
     try:
         # Using physical length as weight
