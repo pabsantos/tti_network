@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import datetime
 from pathlib import Path
 
 import geopandas as gpd
@@ -12,12 +13,30 @@ from joblib import Parallel, delayed
 
 
 def setup_logging():
-    """Configure logging with INFO level and timestamp format."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    """Configure logging with INFO level, console output, and file output."""
+    log_dir = Path("log")
+    log_dir.mkdir(exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = log_dir / f"tti_network_{timestamp}.log"
+
+    log_format = "%(asctime)s - %(levelname)s - %(message)s"
+    date_format = "%Y-%m-%d %H:%M:%S"
+
+    file_handler = logging.FileHandler(log_file, mode="w")
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(logging.Formatter(log_format, date_format))
+
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(logging.Formatter(log_format, date_format))
+
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+
+    logging.info(f"Log file: {log_file.absolute()}")
 
 
 def load_tti_basin(path: str) -> gpd.GeoDataFrame:
