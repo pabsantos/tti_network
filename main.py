@@ -271,6 +271,8 @@ def _compute_clustering_networkit(graph: nx.MultiDiGraph) -> dict:
 
     nk_graph = nk.Graph(len(node_list), directed=False)
     for u, v in graph.edges():
+        if u == v:
+            continue
         u_idx, v_idx = node_to_idx[u], node_to_idx[v]
         if not nk_graph.hasEdge(u_idx, v_idx):
             nk_graph.addEdge(u_idx, v_idx)
