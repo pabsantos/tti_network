@@ -53,20 +53,70 @@ The main pipeline in `main.py` follows this sequence:
 - **geopandas**: Spatial data operations and shapefile I/O
 - **osmnx**: Download and analyze OpenStreetMap road networks
 - **networkx**: Graph data structure and analysis
+- **networkit**: High-performance graph algorithms (C++ backend)
+- **joblib**: Parallel processing for CPU-intensive computations
 - **pandas**: Tabular data operations
 - **matplotlib**: Visualization (currently commented out in main)
 
 ## Known Patterns
 
 - The project uses structured logging throughout with INFO level messages
+- Logs are saved to `log/` directory with timestamp-based filenames
 - Geometry operations include validation (`.make_valid()`) and buffering to handle edge cases
 - OSMnx downloads are cached automatically to avoid repeated API calls
 - Graph is currently set to `network_type="drive"` for road networks
 
+## Performance Optimization with NetworKit
+
+The project uses NetworKit for computationally expensive graph algorithms. NetworKit is 10-100x faster than NetworkX for large graphs because it uses C++ internally.
+
+### When to use NetworKit vs NetworkX
+
+| Algorithm | Use NetworKit | Notes |
+|-----------|---------------|-------|
+| Betweenness centrality (node) | Yes | `nk.centrality.Betweenness` |
+| Betweenness centrality (edge) | Yes | `computeEdgeCentrality=True` |
+| Clustering coefficient | Yes | `nk.centrality.LocalClusteringCoefficient` |
+| All-pairs shortest paths | Yes | `nk.distance.APSP` |
+| Global efficiency | Yes | Calculate from APSP distances |
+| Diameter | Yes | `nk.distance.Diameter` |
+| Weighted shortest paths | No | NetworkX handles custom weights better |
+
+### Graph conversion pattern
+
+```python
+def _nx_to_nk_graph(graph: nx.MultiDiGraph) -> tuple[nk.Graph, dict, dict]:
+    node_list = list(graph.nodes())
+    node_to_idx = {node: idx for idx, node in enumerate(node_list)}
+    idx_to_node = {idx: node for node, idx in node_to_idx.items()}
+
+    nk_graph = nk.Graph(len(node_list), directed=False)
+    for u, v in graph.edges():
+        u_idx, v_idx = node_to_idx[u], node_to_idx[v]
+        if not nk_graph.hasEdge(u_idx, v_idx):
+            nk_graph.addEdge(u_idx, v_idx)
+
+    return nk_graph, node_to_idx, idx_to_node
+```
+
+### Parallel processing
+
+Use `joblib.Parallel` for embarrassingly parallel tasks like edge vulnerability:
+
+```python
+from joblib import Parallel, delayed
+
+results = Parallel(n_jobs=os.cpu_count(), verbose=10)(
+    delayed(compute_function)(args) for args in items
+)
+```
+
 ## Other instructions
 
 - When running a python script, use 'uv run'
-- Don't use excessive comments on code. 
+- Don't use excessive comments on code
 - Always document methods using docstrings
+- Prefer NetworKit over NetworkX for large graph computations
+- Use parallel processing for independent, CPU-intensive operations
 
 
