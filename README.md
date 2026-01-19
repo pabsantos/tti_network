@@ -20,16 +20,27 @@ Geospatial network analysis project for the Tamanduateí basin (TTI). This proje
 - Python 3.13+
 - uv package manager
 - Docker (optional, for containerized execution)
+- NVIDIA GPU with CUDA 12 (optional, for GPU acceleration)
 
 ## Installation
 
-### Local Development
+### Local Development (CPU only)
 
 Install dependencies using uv:
 
 ```bash
 uv sync
 ```
+
+### Local Development (with GPU)
+
+For NVIDIA GPU acceleration, install with CUDA support:
+
+```bash
+uv sync --extra cuda
+```
+
+This installs `nx-cugraph` which automatically accelerates NetworkX operations on GPU.
 
 ### Docker
 
@@ -135,23 +146,26 @@ The docker-compose configuration mounts the following volumes:
 
 ## Performance
 
-The project uses **NetworKit** for computationally expensive graph algorithms, providing 10-100x speedup over pure NetworkX for large graphs.
+The project supports multiple acceleration backends with automatic detection:
+
+### Acceleration Priority
+
+1. **GPU (nx-cugraph)** - Fastest, requires NVIDIA GPU with CUDA
+2. **NetworKit (CPU)** - Fast, C++ backend
+3. **NetworkX + joblib (CPU)** - Fallback with parallel processing
 
 ### Optimized Operations
 
-| Operation | Library | Speedup |
-|-----------|---------|---------|
-| Node betweenness centrality | NetworKit | ~50x |
-| Edge betweenness centrality | NetworKit | ~50x |
-| Clustering coefficient | NetworKit | ~20x |
-| All-pairs shortest paths | NetworKit | ~50x |
-| Global efficiency | NetworKit | ~50x |
-| Diameter | NetworKit | ~10x |
-| Edge vulnerability | NetworKit + joblib | ~100x |
+| Operation | nx-cugraph (GPU) | NetworKit (CPU) | NetworkX |
+|-----------|------------------|-----------------|----------|
+| Node betweenness | ~100-500x | ~50x | 1x |
+| Edge betweenness | ~100-500x | ~50x | 1x |
+| Clustering coefficient | ~50-100x | ~20x | 1x |
+| BFS/Shortest paths | ~100x | ~50x | 1x |
 
-### Parallel Processing
+### Parallel Processing (CPU)
 
-Edge vulnerability computation uses all available CPU cores via `joblib`. The script automatically detects the number of cores:
+When GPU is not available, edge vulnerability computation uses all available CPU cores via `joblib`:
 - Apple M1: 8 cores
 - Desktop CPUs: scales to 12+ cores
 
@@ -160,4 +174,5 @@ Edge vulnerability computation uses all available CPU cores via `joblib`. The sc
 | Configuration | Time |
 |---------------|------|
 | NetworkX only (sequential) | ~weeks |
-| NetworKit + parallel | ~hours |
+| NetworKit (CPU) | ~hours |
+| nx-cugraph (RTX 4090) | ~minutes |

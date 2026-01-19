@@ -66,9 +66,32 @@ The main pipeline in `main.py` follows this sequence:
 - OSMnx downloads are cached automatically to avoid repeated API calls
 - Graph is currently set to `network_type="drive"` for road networks
 
-## Performance Optimization with NetworKit
+## Performance Optimization
 
-The project uses NetworKit for computationally expensive graph algorithms. NetworKit is 10-100x faster than NetworkX for large graphs because it uses C++ internally.
+The project supports multiple acceleration backends with automatic priority:
+
+1. **GPU (nx-cugraph)** - Fastest, auto-detected via `setup_gpu()`
+2. **NetworKit (CPU)** - Fast C++ backend
+3. **NetworkX + joblib (CPU)** - Fallback
+
+### GPU Acceleration (nx-cugraph)
+
+When NVIDIA GPU is available, install with CUDA support:
+
+```bash
+uv sync --extra cuda
+```
+
+The code automatically detects and uses GPU via the `GPU_AVAILABLE` global variable:
+
+```python
+if GPU_AVAILABLE:
+    # Uses NetworkX with nx-cugraph backend (GPU)
+    betweenness = nx.betweenness_centrality(graph)
+elif use_networkit:
+    # Uses NetworKit (CPU, C++)
+    betweenness = _compute_betweenness_networkit(graph)
+```
 
 ### When to use NetworKit vs NetworkX
 
@@ -77,8 +100,8 @@ The project uses NetworKit for computationally expensive graph algorithms. Netwo
 | Betweenness centrality (node) | Yes | `nk.centrality.Betweenness` |
 | Betweenness centrality (edge) | Yes | `computeEdgeCentrality=True` |
 | Clustering coefficient | Yes | `nk.centrality.LocalClusteringCoefficient` |
-| All-pairs shortest paths | Yes | `nk.distance.APSP` |
-| Global efficiency | Yes | Calculate from APSP distances |
+| All-pairs shortest paths | Yes | `nk.distance.APSP` (use BFS for large graphs) |
+| Global efficiency | Yes | Calculate from BFS distances |
 | Diameter | Yes | `nk.distance.Diameter` |
 | Weighted shortest paths | No | NetworkX handles custom weights better |
 

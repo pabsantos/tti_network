@@ -11,6 +11,23 @@ import pandas as pd
 import pyproj
 from joblib import Parallel, delayed
 
+GPU_AVAILABLE = False
+
+
+def setup_gpu():
+    """Configure GPU acceleration using nx-cugraph if available."""
+    global GPU_AVAILABLE
+
+    try:
+        import nx_cugraph
+        os.environ["NX_CUGRAPH_AUTOCONFIG"] = "True"
+        GPU_AVAILABLE = True
+        logging.info("GPU acceleration enabled via nx-cugraph")
+        return True
+    except ImportError:
+        logging.info("nx-cugraph not available, using CPU (NetworKit/NetworkX)")
+        return False
+
 
 def setup_logging():
     """Configure logging with INFO level, console output, and file output."""
@@ -339,7 +356,12 @@ def calculate_node_parameters(
     logging.info("Computing degree for each node...")
     degree = dict(graph.degree())
 
-    if use_networkit:
+    if GPU_AVAILABLE:
+        logging.info("Computing clustering coefficient using GPU (nx-cugraph)...")
+        simple_graph = nx.Graph(graph.to_undirected())
+        clustering = nx.clustering(simple_graph)
+        logging.info("GPU clustering computation completed")
+    elif use_networkit:
         logging.info("Computing clustering coefficient using NetworKit...")
         clustering = _compute_clustering_networkit(graph)
         logging.info("NetworKit clustering computation completed")
@@ -348,7 +370,11 @@ def calculate_node_parameters(
         simple_graph = nx.Graph(graph.to_undirected())
         clustering = nx.clustering(simple_graph)
 
-    if use_networkit:
+    if GPU_AVAILABLE:
+        logging.info("Computing betweenness centrality using GPU (nx-cugraph)...")
+        betweenness = nx.betweenness_centrality(graph)
+        logging.info("GPU betweenness computation completed")
+    elif use_networkit:
         logging.info("Computing betweenness centrality using NetworKit...")
         betweenness = _compute_betweenness_networkit(graph)
         logging.info("NetworKit betweenness computation completed")
@@ -476,7 +502,11 @@ def calculate_edge_parameters(
     """
     logging.info("Calculating edge parameters...")
 
-    if use_networkit:
+    if GPU_AVAILABLE:
+        logging.info("Computing edge betweenness centrality using GPU (nx-cugraph)...")
+        edge_betweenness = nx.edge_betweenness_centrality(graph)
+        logging.info("GPU edge betweenness computation completed")
+    elif use_networkit:
         logging.info("Computing edge betweenness centrality using NetworKit...")
         edge_betweenness_raw = _compute_edge_betweenness_networkit(graph)
         edge_betweenness = {}
@@ -925,6 +955,7 @@ def main():
         Tuple containing filtered OD zones and the road network graph.
     """
     setup_logging()
+    setup_gpu()
 
     # Test run configuration
     TEST_RUN = True
