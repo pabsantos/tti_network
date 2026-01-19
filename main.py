@@ -317,7 +317,9 @@ def _compute_betweenness_subset(graph: nx.MultiDiGraph, sources: list) -> dict:
     Returns:
         Dictionary with partial betweenness values for all nodes.
     """
-    return nx.betweenness_centrality_subset(graph, sources=sources, targets=list(graph.nodes()))
+    return nx.betweenness_centrality_subset(
+        graph, sources=sources, targets=list(graph.nodes())
+    )
 
 
 def calculate_node_parameters(
@@ -357,7 +359,9 @@ def calculate_node_parameters(
         logging.info(f"Using {n_jobs} CPU cores for parallel betweenness computation")
 
         chunk_size = max(1, len(nodes) // n_jobs)
-        node_chunks = [nodes[i:i + chunk_size] for i in range(0, len(nodes), chunk_size)]
+        node_chunks = [
+            nodes[i : i + chunk_size] for i in range(0, len(nodes), chunk_size)
+        ]
 
         partial_betweenness = Parallel(n_jobs=n_jobs, verbose=10)(
             delayed(_compute_betweenness_subset)(graph, chunk) for chunk in node_chunks
@@ -412,7 +416,9 @@ def _compute_edge_betweenness_networkit(graph: nx.MultiDiGraph) -> dict:
         edge_map[(u_idx, v_idx)] = (u, v)
 
     nk_graph.indexEdges()
-    bc = nk.centrality.Betweenness(nk_graph, normalized=True, computeEdgeCentrality=True)
+    bc = nk.centrality.Betweenness(
+        nk_graph, normalized=True, computeEdgeCentrality=True
+    )
     bc.run()
 
     edge_scores = bc.edgeScores()
@@ -454,7 +460,9 @@ def _compute_single_edge_vulnerability(
 
 
 def calculate_edge_parameters(
-    graph: nx.MultiDiGraph, compute_vulnerability: bool = True, use_networkit: bool = True
+    graph: nx.MultiDiGraph,
+    compute_vulnerability: bool = True,
+    use_networkit: bool = True,
 ) -> pd.DataFrame:
     """Calculate parameters for each edge in the graph.
 
@@ -501,7 +509,9 @@ def calculate_edge_parameters(
         logging.info(f"Using {n_jobs} CPU cores for parallel vulnerability computation")
 
         vulnerabilities = Parallel(n_jobs=n_jobs, verbose=10)(
-            delayed(_compute_vulnerability_networkit)(nk_graph, u_idx, v_idx, base_efficiency)
+            delayed(_compute_vulnerability_networkit)(
+                nk_graph, u_idx, v_idx, base_efficiency
+            )
             for u_idx, v_idx in edge_indices
         )
         logging.info("Parallel vulnerability computation completed")
@@ -555,8 +565,10 @@ def calculate_edge_parameters(
 
 
 def calculate_global_parameters(
-    graph: nx.MultiDiGraph, node_data: pd.DataFrame, edge_data: pd.DataFrame,
-    use_networkit: bool = True
+    graph: nx.MultiDiGraph,
+    node_data: pd.DataFrame,
+    edge_data: pd.DataFrame,
+    use_networkit: bool = True,
 ) -> dict:
     """Calculate global network parameters.
 
@@ -597,7 +609,9 @@ def calculate_global_parameters(
         nk_subgraph, node_to_idx, _ = _nx_to_nk_graph(subgraph)
 
         try:
-            diam = nk.distance.Diameter(nk_subgraph, algo=nk.distance.DiameterAlgo.EXACT)
+            diam = nk.distance.Diameter(
+                nk_subgraph, algo=nk.distance.DiameterAlgo.EXACT
+            )
             diam.run()
             diameter = int(diam.getDiameter()[0])
             logging.info(
@@ -612,7 +626,9 @@ def calculate_global_parameters(
                 )
             except nx.NetworkXError:
                 diameter = None
-                logging.warning("Could not calculate diameter (graph may not be connected)")
+                logging.warning(
+                    "Could not calculate diameter (graph may not be connected)"
+                )
 
         try:
             n = nk_subgraph.numberOfNodes()
@@ -631,7 +647,9 @@ def calculate_global_parameters(
             logging.info("Average shortest path length (topological) calculated")
         except Exception as e:
             avg_shortest_path_topo = None
-            logging.warning(f"Could not calculate average shortest path length (topological): {e}")
+            logging.warning(
+                f"Could not calculate average shortest path length (topological): {e}"
+            )
     else:
         try:
             diameter = nx.diameter(subgraph.to_undirected())
@@ -644,11 +662,15 @@ def calculate_global_parameters(
 
         undirected_subgraph = graph.to_undirected().subgraph(largest_cc)
         try:
-            avg_shortest_path_topo = nx.average_shortest_path_length(undirected_subgraph)
+            avg_shortest_path_topo = nx.average_shortest_path_length(
+                undirected_subgraph
+            )
             logging.info("Average shortest path length (topological) calculated")
         except nx.NetworkXError:
             avg_shortest_path_topo = None
-            logging.warning("Could not calculate average shortest path length (topological)")
+            logging.warning(
+                "Could not calculate average shortest path length (topological)"
+            )
 
     undirected_subgraph = graph.to_undirected().subgraph(largest_cc)
 
