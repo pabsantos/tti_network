@@ -16,13 +16,9 @@ dependencies = [
 
 [project.optional-dependencies]
 cuda = [
-    "nx-cugraph-cu12",
+    "nx-cugraph-cu13",
 ]
 
 [[tool.uv.index]]
 name = "nvidia"
 url = "https://pypi.nvidia.com"
-explicit = true
-
-[tool.uv.sources]
-nx-cugraph-cu12 = { index = "nvidia" }

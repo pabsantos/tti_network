@@ -19,12 +19,23 @@ def setup_gpu():
     global GPU_AVAILABLE
 
     try:
-        import nx_cugraph
+        import nx_cugraph as nxcg
         os.environ["NX_CUGRAPH_AUTOCONFIG"] = "True"
+        os.environ["NETWORKX_BACKEND_PRIORITY"] = "cugraph"
         GPU_AVAILABLE = True
-        logging.info("GPU acceleration enabled via nx-cugraph")
+        logging.info(f"GPU acceleration enabled via nx-cugraph (version: {nxcg.__version__})")
         return True
     except ImportError:
+        try:
+            import networkx as nx
+            if "cugraph" in nx.config.backends:
+                os.environ["NX_CUGRAPH_AUTOCONFIG"] = "True"
+                os.environ["NETWORKX_BACKEND_PRIORITY"] = "cugraph"
+                GPU_AVAILABLE = True
+                logging.info("GPU acceleration enabled via cugraph backend")
+                return True
+        except Exception:
+            pass
         logging.info("nx-cugraph not available, using CPU (NetworKit/NetworkX)")
         return False
 
@@ -359,7 +370,7 @@ def calculate_node_parameters(
     if GPU_AVAILABLE:
         logging.info("Computing clustering coefficient using GPU (nx-cugraph)...")
         simple_graph = nx.Graph(graph.to_undirected())
-        clustering = nx.clustering(simple_graph)
+        clustering = nx.clustering(simple_graph, backend="cugraph")
         logging.info("GPU clustering computation completed")
     elif use_networkit:
         logging.info("Computing clustering coefficient using NetworKit...")
@@ -372,7 +383,7 @@ def calculate_node_parameters(
 
     if GPU_AVAILABLE:
         logging.info("Computing betweenness centrality using GPU (nx-cugraph)...")
-        betweenness = nx.betweenness_centrality(graph)
+        betweenness = nx.betweenness_centrality(graph, backend="cugraph")
         logging.info("GPU betweenness computation completed")
     elif use_networkit:
         logging.info("Computing betweenness centrality using NetworKit...")
@@ -504,7 +515,7 @@ def calculate_edge_parameters(
 
     if GPU_AVAILABLE:
         logging.info("Computing edge betweenness centrality using GPU (nx-cugraph)...")
-        edge_betweenness = nx.edge_betweenness_centrality(graph)
+        edge_betweenness = nx.edge_betweenness_centrality(graph, backend="cugraph")
         logging.info("GPU edge betweenness computation completed")
     elif use_networkit:
         logging.info("Computing edge betweenness centrality using NetworKit...")
