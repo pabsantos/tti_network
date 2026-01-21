@@ -15,7 +15,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-cuda = [
+cuda12 = [
+    "nx-cugraph-cu12",
+]
+cuda13 = [
     "nx-cugraph-cu13",
 ]
 
