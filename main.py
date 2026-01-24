@@ -369,16 +369,8 @@ def calculate_node_parameters(
 
     if GPU_AVAILABLE:
         logging.info("Computing clustering coefficient using GPU (nx-cugraph)...")
-        node_list = list(graph.nodes())
-        node_to_idx = {node: idx for idx, node in enumerate(node_list)}
-        clean_graph = nx.Graph()
-        clean_graph.add_nodes_from(range(len(node_list)))
-        for u, v in graph.to_undirected().edges():
-            u_idx, v_idx = node_to_idx[u], node_to_idx[v]
-            if u_idx != v_idx and not clean_graph.has_edge(u_idx, v_idx):
-                clean_graph.add_edge(u_idx, v_idx)
-        clustering_raw = nx.clustering(clean_graph, backend="cugraph")
-        clustering = {node_list[idx]: val for idx, val in clustering_raw.items()}
+        simple_digraph = nx.DiGraph(graph)
+        clustering = nx.clustering(simple_digraph, backend="cugraph")
         logging.info("GPU clustering computation completed")
     elif use_networkit:
         logging.info("Computing clustering coefficient using NetworKit...")
@@ -391,16 +383,8 @@ def calculate_node_parameters(
 
     if GPU_AVAILABLE:
         logging.info("Computing betweenness centrality using GPU (nx-cugraph)...")
-        node_list = list(graph.nodes())
-        node_to_idx = {node: idx for idx, node in enumerate(node_list)}
-        clean_graph = nx.DiGraph()
-        clean_graph.add_nodes_from(range(len(node_list)))
-        for u, v in graph.edges():
-            u_idx, v_idx = node_to_idx[u], node_to_idx[v]
-            if u_idx != v_idx and not clean_graph.has_edge(u_idx, v_idx):
-                clean_graph.add_edge(u_idx, v_idx)
-        betweenness_raw = nx.betweenness_centrality(clean_graph, backend="cugraph")
-        betweenness = {node_list[idx]: val for idx, val in betweenness_raw.items()}
+        simple_digraph = nx.DiGraph(graph)
+        betweenness = nx.betweenness_centrality(simple_digraph, backend="cugraph")
         logging.info("GPU betweenness computation completed")
     elif use_networkit:
         logging.info("Computing betweenness centrality using NetworKit...")
@@ -532,22 +516,11 @@ def calculate_edge_parameters(
 
     if GPU_AVAILABLE:
         logging.info("Computing edge betweenness centrality using GPU (nx-cugraph)...")
-        node_list = list(graph.nodes())
-        node_to_idx = {node: idx for idx, node in enumerate(node_list)}
-        clean_graph = nx.DiGraph()
-        clean_graph.add_nodes_from(range(len(node_list)))
-        for u, v in graph.edges():
-            u_idx, v_idx = node_to_idx[u], node_to_idx[v]
-            if u_idx != v_idx and not clean_graph.has_edge(u_idx, v_idx):
-                clean_graph.add_edge(u_idx, v_idx)
-        edge_betweenness_raw = nx.edge_betweenness_centrality(clean_graph, backend="cugraph")
-        idx_to_node = {idx: node for node, idx in node_to_idx.items()}
-        edge_betweenness_mapped = {}
-        for (u_idx, v_idx), val in edge_betweenness_raw.items():
-            edge_betweenness_mapped[(idx_to_node[u_idx], idx_to_node[v_idx])] = val
+        simple_digraph = nx.DiGraph(graph)
+        edge_betweenness_raw = nx.edge_betweenness_centrality(simple_digraph, backend="cugraph")
         edge_betweenness = {}
         for u, v, key in graph.edges(keys=True):
-            edge_betweenness[(u, v, key)] = edge_betweenness_mapped.get((u, v), 0)
+            edge_betweenness[(u, v, key)] = edge_betweenness_raw.get((u, v), 0)
         logging.info("GPU edge betweenness computation completed")
     elif use_networkit:
         logging.info("Computing edge betweenness centrality using NetworKit...")
