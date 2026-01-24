@@ -383,7 +383,8 @@ def calculate_node_parameters(
 
     if GPU_AVAILABLE:
         logging.info("Computing betweenness centrality using GPU (nx-cugraph)...")
-        betweenness = nx.betweenness_centrality(graph, backend="cugraph")
+        simple_digraph = nx.DiGraph(graph)
+        betweenness = nx.betweenness_centrality(simple_digraph, backend="cugraph")
         logging.info("GPU betweenness computation completed")
     elif use_networkit:
         logging.info("Computing betweenness centrality using NetworKit...")
@@ -515,7 +516,11 @@ def calculate_edge_parameters(
 
     if GPU_AVAILABLE:
         logging.info("Computing edge betweenness centrality using GPU (nx-cugraph)...")
-        edge_betweenness = nx.edge_betweenness_centrality(graph, backend="cugraph")
+        simple_digraph = nx.DiGraph(graph)
+        edge_betweenness_raw = nx.edge_betweenness_centrality(simple_digraph, backend="cugraph")
+        edge_betweenness = {}
+        for u, v, key in graph.edges(keys=True):
+            edge_betweenness[(u, v, key)] = edge_betweenness_raw.get((u, v), 0)
         logging.info("GPU edge betweenness computation completed")
     elif use_networkit:
         logging.info("Computing edge betweenness centrality using NetworKit...")
