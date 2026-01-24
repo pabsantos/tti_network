@@ -247,6 +247,30 @@ def _calculate_efficiency_apsp(nk_graph: nk.Graph) -> float:
     return total_efficiency / (n * (n - 1))
 
 
+def _compute_vulnerability_apsp(
+    nk_graph: nk.Graph, u_idx: int, v_idx: int, base_efficiency: float, n_threads: int
+) -> float:
+    """Compute vulnerability for a single edge using APSP.
+
+    Args:
+        nk_graph: NetworKit Graph.
+        u_idx: Source node index.
+        v_idx: Target node index.
+        base_efficiency: Base global efficiency.
+        n_threads: Number of threads for APSP.
+
+    Returns:
+        Vulnerability value.
+    """
+    nk.setNumberOfThreads(n_threads)
+    graph_copy = nk.Graph(nk_graph)
+    if graph_copy.hasEdge(u_idx, v_idx):
+        graph_copy.removeEdge(u_idx, v_idx)
+    eff_without = _calculate_efficiency_apsp(graph_copy)
+    if base_efficiency > 0:
+        return (base_efficiency - eff_without) / base_efficiency
+    return 0.0
+
 
 
 def _compute_clustering_networkit(graph: nx.MultiDiGraph) -> dict:
@@ -473,24 +497,35 @@ def calculate_edge_parameters(
     n_edges = len(edges_list)
 
     if compute_vulnerability:
-        logging.info("Computing edge vulnerability using NetworKit APSP...")
+        logging.info("Computing edge vulnerability using NetworKit APSP (parallel)...")
         nk_graph, node_to_idx, idx_to_node = _nx_to_nk_graph(graph)
 
         logging.info("Computing base global efficiency (APSP)...")
+        nk.setNumberOfThreads(os.cpu_count() or 8)
         base_efficiency = _calculate_efficiency_apsp(nk_graph)
         logging.info(f"Base global efficiency: {base_efficiency:.6f}")
 
-        vulnerabilities = []
-        for i, (u, v, key, _) in enumerate(edges_list):
-            if (i + 1) % 100 == 0 or (i + 1) == n_edges:
-                logging.info(f"Computing vulnerability {i+1}/{n_edges}")
+        n_nodes = nk_graph.numberOfNodes()
+        matrix_size_gb = (n_nodes ** 2 * 8) / (1024 ** 3)
+        available_ram_gb = 96
+        max_workers_by_ram = max(1, int(available_ram_gb / max(matrix_size_gb, 0.001)))
+        n_jobs = min(os.cpu_count() or 8, max_workers_by_ram)
+        threads_per_worker = max(1, (os.cpu_count() or 8) // n_jobs)
+
+        logging.info(f"APSP matrix size: {matrix_size_gb:.3f} GB per worker")
+        logging.info(f"Using {n_jobs} parallel workers, {threads_per_worker} threads each")
+
+        edge_indices = []
+        for u, v, key, _ in edges_list:
             u_idx, v_idx = node_to_idx[u], node_to_idx[v]
-            graph_copy = nk.Graph(nk_graph)
-            if graph_copy.hasEdge(u_idx, v_idx):
-                graph_copy.removeEdge(u_idx, v_idx)
-            eff_without = _calculate_efficiency_apsp(graph_copy)
-            vuln = (base_efficiency - eff_without) / base_efficiency if base_efficiency > 0 else 0.0
-            vulnerabilities.append(vuln)
+            edge_indices.append((u_idx, v_idx))
+
+        vulnerabilities = Parallel(n_jobs=n_jobs, verbose=10)(
+            delayed(_compute_vulnerability_apsp)(
+                nk_graph, u_idx, v_idx, base_efficiency, threads_per_worker
+            )
+            for u_idx, v_idx in edge_indices
+        )
         logging.info("APSP vulnerability computation completed")
     else:
         logging.info("Skipping edge vulnerability calculation (disabled)")
