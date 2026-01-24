@@ -536,11 +536,29 @@ def calculate_edge_parameters(
     edges_list = list(graph.edges(keys=True, data=True))
     n_edges = len(edges_list)
 
-    logging.info("Converting graph to NetworKit format...")
-    nk_graph, node_to_idx, idx_to_node = _nx_to_nk_graph(graph)
+    if compute_vulnerability and GPU_AVAILABLE:
+        logging.info("Computing edge vulnerability using GPU (nx-cugraph)...")
+        simple_graph = nx.Graph(nx.DiGraph(graph))
 
-    if compute_vulnerability:
+        logging.info("Computing base global efficiency using GPU...")
+        base_efficiency = nx.global_efficiency(simple_graph)
+        logging.info(f"Base global efficiency: {base_efficiency:.6f}")
+
+        vulnerabilities = []
+        for i, (u, v, key, _) in enumerate(edges_list):
+            if (i + 1) % 100 == 0 or (i + 1) == n_edges:
+                logging.info(f"Computing vulnerability {i+1}/{n_edges}")
+            modified = simple_graph.copy()
+            if modified.has_edge(u, v):
+                modified.remove_edge(u, v)
+            eff_without = nx.global_efficiency(modified)
+            vuln = (base_efficiency - eff_without) / base_efficiency if base_efficiency > 0 else 0.0
+            vulnerabilities.append(vuln)
+        logging.info("GPU vulnerability computation completed")
+
+    elif compute_vulnerability:
         logging.info("Computing edge vulnerability using NetworKit (parallel)...")
+        nk_graph, node_to_idx, idx_to_node = _nx_to_nk_graph(graph)
 
         logging.info("Computing base global efficiency...")
         base_efficiency = _calculate_efficiency_networkit(nk_graph)
