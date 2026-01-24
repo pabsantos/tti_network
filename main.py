@@ -6,10 +6,39 @@ from pathlib import Path
 import geopandas as gpd
 import networkit as nk
 import networkx as nx
+import numpy as np
 import osmnx as ox
 import pandas as pd
 import pyproj
 from joblib import Parallel, delayed
+
+GPU_AVAILABLE = False
+
+
+def setup_gpu():
+    """Configure GPU acceleration using nx-cugraph if available."""
+    global GPU_AVAILABLE
+
+    try:
+        import nx_cugraph as nxcg
+        os.environ["NX_CUGRAPH_AUTOCONFIG"] = "True"
+        os.environ["NETWORKX_BACKEND_PRIORITY"] = "cugraph"
+        GPU_AVAILABLE = True
+        logging.info(f"GPU acceleration enabled via nx-cugraph (version: {nxcg.__version__})")
+        return True
+    except ImportError:
+        try:
+            import networkx as nx
+            if "cugraph" in nx.config.backends:
+                os.environ["NX_CUGRAPH_AUTOCONFIG"] = "True"
+                os.environ["NETWORKX_BACKEND_PRIORITY"] = "cugraph"
+                GPU_AVAILABLE = True
+                logging.info("GPU acceleration enabled via cugraph backend")
+                return True
+        except Exception:
+            pass
+        logging.info("nx-cugraph not available, using CPU (NetworKit/NetworkX)")
+        return False
 
 
 def setup_logging():
@@ -172,19 +201,6 @@ def plot_graph(graph: nx.MultiDiGraph):
     logging.info("Graph plotted successfully")
 
 
-def calculate_global_efficiency(graph: nx.MultiDiGraph) -> float:
-    """Calculate global efficiency of the network using NetworkX.
-
-    Args:
-        graph: NetworkX MultiDiGraph.
-
-    Returns:
-        Global efficiency value.
-    """
-    undirected = graph.to_undirected()
-    return nx.global_efficiency(undirected)
-
-
 def _nx_to_nk_graph(graph: nx.MultiDiGraph) -> tuple[nk.Graph, dict, dict]:
     """Convert NetworkX MultiDiGraph to NetworKit Graph.
 
@@ -207,8 +223,8 @@ def _nx_to_nk_graph(graph: nx.MultiDiGraph) -> tuple[nk.Graph, dict, dict]:
     return nk_graph, node_to_idx, idx_to_node
 
 
-def _calculate_efficiency_networkit(nk_graph: nk.Graph) -> float:
-    """Calculate global efficiency using NetworKit with memory-efficient BFS.
+def _calculate_efficiency_apsp(nk_graph: nk.Graph) -> float:
+    """Calculate global efficiency using NetworKit APSP (parallel, all cores).
 
     Args:
         nk_graph: NetworKit Graph.
@@ -220,41 +236,41 @@ def _calculate_efficiency_networkit(nk_graph: nk.Graph) -> float:
     if n <= 1:
         return 0.0
 
-    total_efficiency = 0.0
-    for u in range(n):
-        bfs = nk.distance.BFS(nk_graph, u)
-        bfs.run()
-        distances = bfs.getDistances()
-        for v in range(n):
-            if u != v:
-                dist = distances[v]
-                if dist < 1e308 and dist > 0:
-                    total_efficiency += 1.0 / dist
+    apsp = nk.distance.APSP(nk_graph)
+    apsp.run()
+
+    distances = np.array(apsp.getDistances(), dtype=np.float64)
+    np.fill_diagonal(distances, 0)
+    valid = (distances > 0) & (distances < 1e308)
+    total_efficiency = np.sum(1.0 / distances[valid])
 
     return total_efficiency / (n * (n - 1))
 
 
-def _compute_vulnerability_networkit(
-    nk_graph: nk.Graph, u_idx: int, v_idx: int, base_efficiency: float
+def _compute_vulnerability_apsp(
+    nk_graph: nk.Graph, u_idx: int, v_idx: int, base_efficiency: float, n_threads: int
 ) -> float:
-    """Compute vulnerability for a single edge using NetworKit.
+    """Compute vulnerability for a single edge using APSP.
 
     Args:
         nk_graph: NetworKit Graph.
         u_idx: Source node index.
         v_idx: Target node index.
         base_efficiency: Base global efficiency.
+        n_threads: Number of threads for APSP.
 
     Returns:
         Vulnerability value.
     """
+    nk.setNumberOfThreads(n_threads)
     graph_copy = nk.Graph(nk_graph)
-    graph_copy.removeEdge(u_idx, v_idx)
-
-    efficiency_without = _calculate_efficiency_networkit(graph_copy)
+    if graph_copy.hasEdge(u_idx, v_idx):
+        graph_copy.removeEdge(u_idx, v_idx)
+    eff_without = _calculate_efficiency_apsp(graph_copy)
     if base_efficiency > 0:
-        return (base_efficiency - efficiency_without) / base_efficiency
+        return (base_efficiency - eff_without) / base_efficiency
     return 0.0
+
 
 
 def _compute_clustering_networkit(graph: nx.MultiDiGraph) -> dict:
@@ -339,7 +355,12 @@ def calculate_node_parameters(
     logging.info("Computing degree for each node...")
     degree = dict(graph.degree())
 
-    if use_networkit:
+    if GPU_AVAILABLE:
+        logging.info("Computing clustering coefficient using GPU (nx-cugraph)...")
+        simple_graph = nx.Graph(graph.to_undirected())
+        clustering = nx.clustering(simple_graph, backend="cugraph")
+        logging.info("GPU clustering computation completed")
+    elif use_networkit:
         logging.info("Computing clustering coefficient using NetworKit...")
         clustering = _compute_clustering_networkit(graph)
         logging.info("NetworKit clustering computation completed")
@@ -348,7 +369,12 @@ def calculate_node_parameters(
         simple_graph = nx.Graph(graph.to_undirected())
         clustering = nx.clustering(simple_graph)
 
-    if use_networkit:
+    if GPU_AVAILABLE:
+        logging.info("Computing betweenness centrality using GPU (nx-cugraph)...")
+        simple_digraph = nx.DiGraph(graph)
+        betweenness = nx.betweenness_centrality(simple_digraph, backend="cugraph")
+        logging.info("GPU betweenness computation completed")
+    elif use_networkit:
         logging.info("Computing betweenness centrality using NetworKit...")
         betweenness = _compute_betweenness_networkit(graph)
         logging.info("NetworKit betweenness computation completed")
@@ -431,34 +457,6 @@ def _compute_edge_betweenness_networkit(graph: nx.MultiDiGraph) -> dict:
     return result
 
 
-def _compute_single_edge_vulnerability(
-    graph: nx.MultiDiGraph, u, v, key, base_efficiency: float
-) -> float:
-    """Compute vulnerability for a single edge by removing it and measuring efficiency drop.
-
-    Args:
-        graph: NetworkX MultiDiGraph.
-        u: Source node.
-        v: Target node.
-        key: Edge key.
-        base_efficiency: Base global efficiency of the complete graph.
-
-    Returns:
-        Vulnerability value for the edge.
-    """
-    graph_copy = graph.copy()
-    graph_copy.remove_edge(u, v, key)
-
-    if len(graph_copy.nodes()) > 0:
-        efficiency_without = calculate_global_efficiency(graph_copy)
-        return (
-            (base_efficiency - efficiency_without) / base_efficiency
-            if base_efficiency > 0
-            else 0
-        )
-    return 0
-
-
 def calculate_edge_parameters(
     graph: nx.MultiDiGraph,
     compute_vulnerability: bool = True,
@@ -476,7 +474,15 @@ def calculate_edge_parameters(
     """
     logging.info("Calculating edge parameters...")
 
-    if use_networkit:
+    if GPU_AVAILABLE:
+        logging.info("Computing edge betweenness centrality using GPU (nx-cugraph)...")
+        simple_digraph = nx.DiGraph(graph)
+        edge_betweenness_raw = nx.edge_betweenness_centrality(simple_digraph, backend="cugraph")
+        edge_betweenness = {}
+        for u, v, key in graph.edges(keys=True):
+            edge_betweenness[(u, v, key)] = edge_betweenness_raw.get((u, v), 0)
+        logging.info("GPU edge betweenness computation completed")
+    elif use_networkit:
         logging.info("Computing edge betweenness centrality using NetworKit...")
         edge_betweenness_raw = _compute_edge_betweenness_networkit(graph)
         edge_betweenness = {}
@@ -490,31 +496,37 @@ def calculate_edge_parameters(
     edges_list = list(graph.edges(keys=True, data=True))
     n_edges = len(edges_list)
 
-    logging.info("Converting graph to NetworKit format...")
-    nk_graph, node_to_idx, idx_to_node = _nx_to_nk_graph(graph)
-
     if compute_vulnerability:
-        logging.info("Computing edge vulnerability using NetworKit (parallel)...")
+        logging.info("Computing edge vulnerability using NetworKit APSP (parallel)...")
+        nk_graph, node_to_idx, idx_to_node = _nx_to_nk_graph(graph)
 
-        logging.info("Computing base global efficiency...")
-        base_efficiency = _calculate_efficiency_networkit(nk_graph)
+        logging.info("Computing base global efficiency (APSP)...")
+        nk.setNumberOfThreads(os.cpu_count() or 8)
+        base_efficiency = _calculate_efficiency_apsp(nk_graph)
         logging.info(f"Base global efficiency: {base_efficiency:.6f}")
+
+        n_nodes = nk_graph.numberOfNodes()
+        matrix_size_gb = (n_nodes ** 2 * 8) / (1024 ** 3)
+        available_ram_gb = 96
+        max_workers_by_ram = max(1, int(available_ram_gb / max(matrix_size_gb, 0.001)))
+        n_jobs = min(os.cpu_count() or 8, max_workers_by_ram)
+        threads_per_worker = max(1, (os.cpu_count() or 8) // n_jobs)
+
+        logging.info(f"APSP matrix size: {matrix_size_gb:.3f} GB per worker")
+        logging.info(f"Using {n_jobs} parallel workers, {threads_per_worker} threads each")
 
         edge_indices = []
         for u, v, key, _ in edges_list:
             u_idx, v_idx = node_to_idx[u], node_to_idx[v]
             edge_indices.append((u_idx, v_idx))
 
-        n_jobs = os.cpu_count() or 8
-        logging.info(f"Using {n_jobs} CPU cores for parallel vulnerability computation")
-
         vulnerabilities = Parallel(n_jobs=n_jobs, verbose=10)(
-            delayed(_compute_vulnerability_networkit)(
-                nk_graph, u_idx, v_idx, base_efficiency
+            delayed(_compute_vulnerability_apsp)(
+                nk_graph, u_idx, v_idx, base_efficiency, threads_per_worker
             )
             for u_idx, v_idx in edge_indices
         )
-        logging.info("Parallel vulnerability computation completed")
+        logging.info("APSP vulnerability computation completed")
     else:
         logging.info("Skipping edge vulnerability calculation (disabled)")
         vulnerabilities = [0.0] * n_edges
@@ -925,6 +937,7 @@ def main():
         Tuple containing filtered OD zones and the road network graph.
     """
     setup_logging()
+    setup_gpu()
 
     # Test run configuration
     TEST_RUN = True
