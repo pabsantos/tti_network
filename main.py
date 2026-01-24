@@ -369,8 +369,8 @@ def calculate_node_parameters(
 
     if GPU_AVAILABLE:
         logging.info("Computing clustering coefficient using GPU (nx-cugraph)...")
-        simple_digraph = nx.DiGraph(graph)
-        clustering = nx.clustering(simple_digraph, backend="cugraph")
+        simple_graph = nx.Graph(graph.to_undirected())
+        clustering = nx.clustering(simple_graph, backend="cugraph")
         logging.info("GPU clustering computation completed")
     elif use_networkit:
         logging.info("Computing clustering coefficient using NetworKit...")
