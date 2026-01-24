@@ -15,15 +15,3 @@ dependencies = [
     "pandas>=2.3.3",
     "pyproj>=3.6.0",
 ]
-
-[project.optional-dependencies]
-cuda12 = [
-    "nx-cugraph-cu12==24.12.*",
-]
-
-[[tool.uv.index]]
-name = "nvidia"
-url = "https://pypi.nvidia.com"
-
-[tool.uv.sources]
-nx-cugraph-cu12 = { index = "nvidia" }

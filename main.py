@@ -12,33 +12,15 @@ import pandas as pd
 import pyproj
 from joblib import Parallel, delayed
 
-GPU_AVAILABLE = False
 
-
-def setup_gpu():
-    """Configure GPU acceleration using nx-cugraph if available."""
-    global GPU_AVAILABLE
-
+def _get_available_ram_gb() -> float:
+    """Detect available system RAM in gigabytes."""
     try:
-        import nx_cugraph as nxcg
-        os.environ["NX_CUGRAPH_AUTOCONFIG"] = "True"
-        os.environ["NETWORKX_BACKEND_PRIORITY"] = "cugraph"
-        GPU_AVAILABLE = True
-        logging.info(f"GPU acceleration enabled via nx-cugraph (version: {nxcg.__version__})")
-        return True
-    except ImportError:
-        try:
-            import networkx as nx
-            if "cugraph" in nx.config.backends:
-                os.environ["NX_CUGRAPH_AUTOCONFIG"] = "True"
-                os.environ["NETWORKX_BACKEND_PRIORITY"] = "cugraph"
-                GPU_AVAILABLE = True
-                logging.info("GPU acceleration enabled via cugraph backend")
-                return True
-        except Exception:
-            pass
-        logging.info("nx-cugraph not available, using CPU (NetworKit/NetworkX)")
-        return False
+        pages = os.sysconf("SC_PHYS_PAGES")
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        return (pages * page_size) / (1024**3)
+    except (ValueError, AttributeError):
+        return 96.0
 
 
 def setup_logging():
@@ -202,7 +184,7 @@ def plot_graph(graph: nx.MultiDiGraph):
 
 
 def _nx_to_nk_graph(graph: nx.MultiDiGraph) -> tuple[nk.Graph, dict, dict]:
-    """Convert NetworkX MultiDiGraph to NetworKit Graph.
+    """Convert NetworkX MultiDiGraph to NetworKit undirected Graph.
 
     Args:
         graph: NetworkX MultiDiGraph.
@@ -224,7 +206,10 @@ def _nx_to_nk_graph(graph: nx.MultiDiGraph) -> tuple[nk.Graph, dict, dict]:
 
 
 def _calculate_efficiency_apsp(nk_graph: nk.Graph) -> float:
-    """Calculate global efficiency using NetworKit APSP (parallel, all cores).
+    """Calculate global efficiency using NetworKit APSP.
+
+    Uses all available CPU threads internally for parallel BFS.
+    Requires O(N^2) memory for the distance matrix.
 
     Args:
         nk_graph: NetworKit Graph.
@@ -272,9 +257,8 @@ def _compute_vulnerability_apsp(
     return 0.0
 
 
-
 def _compute_clustering_networkit(graph: nx.MultiDiGraph) -> dict:
-    """Compute local clustering coefficient using NetworKit (faster than NetworkX).
+    """Compute local clustering coefficient using NetworKit.
 
     Args:
         graph: NetworkX MultiDiGraph.
@@ -301,7 +285,7 @@ def _compute_clustering_networkit(graph: nx.MultiDiGraph) -> dict:
 
 
 def _compute_betweenness_networkit(graph: nx.MultiDiGraph) -> dict:
-    """Compute betweenness centrality using NetworKit (faster than NetworkX).
+    """Compute betweenness centrality using NetworKit.
 
     Args:
         graph: NetworkX MultiDiGraph.
@@ -323,104 +307,8 @@ def _compute_betweenness_networkit(graph: nx.MultiDiGraph) -> dict:
     return {node: scores[node_to_idx[node]] for node in node_list}
 
 
-def _compute_betweenness_subset(graph: nx.MultiDiGraph, sources: list) -> dict:
-    """Compute betweenness centrality contribution from a subset of source nodes.
-
-    Args:
-        graph: NetworkX MultiDiGraph.
-        sources: List of source nodes to compute from.
-
-    Returns:
-        Dictionary with partial betweenness values for all nodes.
-    """
-    return nx.betweenness_centrality_subset(
-        graph, sources=sources, targets=list(graph.nodes())
-    )
-
-
-def calculate_node_parameters(
-    graph: nx.MultiDiGraph, use_networkit: bool = True
-) -> pd.DataFrame:
-    """Calculate local parameters for each node in the graph.
-
-    Args:
-        graph: NetworkX MultiDiGraph.
-        use_networkit: Use NetworKit for betweenness (faster). Falls back to parallel NetworkX if False.
-
-    Returns:
-        DataFrame with node parameters (k_i, c_i, b_i, avg_l_i).
-    """
-    logging.info("Calculating node parameters...")
-
-    logging.info("Computing degree for each node...")
-    degree = dict(graph.degree())
-
-    if GPU_AVAILABLE:
-        logging.info("Computing clustering coefficient using GPU (nx-cugraph)...")
-        simple_graph = nx.Graph(graph.to_undirected())
-        clustering = nx.clustering(simple_graph, backend="cugraph")
-        logging.info("GPU clustering computation completed")
-    elif use_networkit:
-        logging.info("Computing clustering coefficient using NetworKit...")
-        clustering = _compute_clustering_networkit(graph)
-        logging.info("NetworKit clustering computation completed")
-    else:
-        logging.info("Computing clustering coefficient using NetworkX...")
-        simple_graph = nx.Graph(graph.to_undirected())
-        clustering = nx.clustering(simple_graph)
-
-    if GPU_AVAILABLE:
-        logging.info("Computing betweenness centrality using GPU (nx-cugraph)...")
-        simple_digraph = nx.DiGraph(graph)
-        betweenness = nx.betweenness_centrality(simple_digraph, backend="cugraph")
-        logging.info("GPU betweenness computation completed")
-    elif use_networkit:
-        logging.info("Computing betweenness centrality using NetworKit...")
-        betweenness = _compute_betweenness_networkit(graph)
-        logging.info("NetworKit betweenness computation completed")
-    else:
-        logging.info("Computing betweenness centrality using NetworkX (parallel)...")
-        nodes = list(graph.nodes())
-        n_jobs = os.cpu_count() or 8
-        logging.info(f"Using {n_jobs} CPU cores for parallel betweenness computation")
-
-        chunk_size = max(1, len(nodes) // n_jobs)
-        node_chunks = [
-            nodes[i : i + chunk_size] for i in range(0, len(nodes), chunk_size)
-        ]
-
-        partial_betweenness = Parallel(n_jobs=n_jobs, verbose=10)(
-            delayed(_compute_betweenness_subset)(graph, chunk) for chunk in node_chunks
-        )
-
-        betweenness = {node: 0.0 for node in nodes}
-        for partial in partial_betweenness:
-            for node, value in partial.items():
-                betweenness[node] += value
-
-    logging.info("Computing average edge length for each node...")
-    avg_edge_length = {}
-    for node in graph.nodes():
-        edges = graph.edges(node, data=True)
-        lengths = [data.get("length", 0) for _, _, data in edges]
-        avg_edge_length[node] = sum(lengths) / len(lengths) if lengths else 0
-
-    node_data = pd.DataFrame(
-        {
-            "node": list(graph.nodes()),
-            "k_i": [degree[n] for n in graph.nodes()],
-            "c_i": [clustering[n] for n in graph.nodes()],
-            "b_i": [betweenness[n] for n in graph.nodes()],
-            "avg_l_i": [avg_edge_length[n] for n in graph.nodes()],
-        }
-    )
-
-    logging.info(f"Node parameters calculated for {len(node_data)} nodes")
-    return node_data
-
-
 def _compute_edge_betweenness_networkit(graph: nx.MultiDiGraph) -> dict:
-    """Compute edge betweenness centrality using NetworKit (faster than NetworkX).
+    """Compute edge betweenness centrality using NetworKit.
 
     Args:
         graph: NetworkX MultiDiGraph.
@@ -457,41 +345,69 @@ def _compute_edge_betweenness_networkit(graph: nx.MultiDiGraph) -> dict:
     return result
 
 
+def calculate_node_parameters(graph: nx.MultiDiGraph) -> pd.DataFrame:
+    """Calculate local parameters for each node using NetworKit.
+
+    Args:
+        graph: NetworkX MultiDiGraph.
+
+    Returns:
+        DataFrame with node parameters (k_i, c_i, b_i, avg_l_i).
+    """
+    logging.info("Calculating node parameters...")
+
+    logging.info("Computing degree for each node...")
+    degree = dict(graph.degree())
+
+    logging.info("Computing clustering coefficient using NetworKit...")
+    clustering = _compute_clustering_networkit(graph)
+    logging.info("Clustering computation completed")
+
+    logging.info("Computing betweenness centrality using NetworKit...")
+    betweenness = _compute_betweenness_networkit(graph)
+    logging.info("Betweenness computation completed")
+
+    logging.info("Computing average edge length for each node...")
+    avg_edge_length = {}
+    for node in graph.nodes():
+        edges = graph.edges(node, data=True)
+        lengths = [data.get("length", 0) for _, _, data in edges]
+        avg_edge_length[node] = sum(lengths) / len(lengths) if lengths else 0
+
+    node_data = pd.DataFrame(
+        {
+            "node": list(graph.nodes()),
+            "k_i": [degree[n] for n in graph.nodes()],
+            "c_i": [clustering[n] for n in graph.nodes()],
+            "b_i": [betweenness[n] for n in graph.nodes()],
+            "avg_l_i": [avg_edge_length[n] for n in graph.nodes()],
+        }
+    )
+
+    logging.info(f"Node parameters calculated for {len(node_data)} nodes")
+    return node_data
+
+
 def calculate_edge_parameters(
-    graph: nx.MultiDiGraph,
-    compute_vulnerability: bool = True,
-    use_networkit: bool = True,
+    graph: nx.MultiDiGraph, compute_vulnerability: bool = True
 ) -> pd.DataFrame:
-    """Calculate parameters for each edge in the graph.
+    """Calculate parameters for each edge using NetworKit.
 
     Args:
         graph: NetworkX MultiDiGraph.
         compute_vulnerability: Whether to compute edge vulnerability (expensive).
-        use_networkit: Use NetworKit for edge betweenness (faster).
 
     Returns:
         DataFrame with edge parameters (l_topo, l_eucl, l_manh, length, e_ij, v_ij).
     """
     logging.info("Calculating edge parameters...")
 
-    if GPU_AVAILABLE:
-        logging.info("Computing edge betweenness centrality using GPU (nx-cugraph)...")
-        simple_digraph = nx.DiGraph(graph)
-        edge_betweenness_raw = nx.edge_betweenness_centrality(simple_digraph, backend="cugraph")
-        edge_betweenness = {}
-        for u, v, key in graph.edges(keys=True):
-            edge_betweenness[(u, v, key)] = edge_betweenness_raw.get((u, v), 0)
-        logging.info("GPU edge betweenness computation completed")
-    elif use_networkit:
-        logging.info("Computing edge betweenness centrality using NetworKit...")
-        edge_betweenness_raw = _compute_edge_betweenness_networkit(graph)
-        edge_betweenness = {}
-        for u, v, key in graph.edges(keys=True):
-            edge_betweenness[(u, v, key)] = edge_betweenness_raw.get((u, v), 0)
-        logging.info("NetworKit edge betweenness computation completed")
-    else:
-        logging.info("Computing edge betweenness centrality using NetworkX...")
-        edge_betweenness = nx.edge_betweenness_centrality(graph)
+    logging.info("Computing edge betweenness centrality using NetworKit...")
+    edge_betweenness_raw = _compute_edge_betweenness_networkit(graph)
+    edge_betweenness = {}
+    for u, v, key in graph.edges(keys=True):
+        edge_betweenness[(u, v, key)] = edge_betweenness_raw.get((u, v), 0)
+    logging.info("Edge betweenness computation completed")
 
     edges_list = list(graph.edges(keys=True, data=True))
     n_edges = len(edges_list)
@@ -506,12 +422,13 @@ def calculate_edge_parameters(
         logging.info(f"Base global efficiency: {base_efficiency:.6f}")
 
         n_nodes = nk_graph.numberOfNodes()
-        matrix_size_gb = (n_nodes ** 2 * 8) / (1024 ** 3)
-        available_ram_gb = 96
+        matrix_size_gb = (n_nodes**2 * 8) / (1024**3)
+        available_ram_gb = _get_available_ram_gb()
         max_workers_by_ram = max(1, int(available_ram_gb / max(matrix_size_gb, 0.001)))
         n_jobs = min(os.cpu_count() or 8, max_workers_by_ram)
         threads_per_worker = max(1, (os.cpu_count() or 8) // n_jobs)
 
+        logging.info(f"Available RAM: {available_ram_gb:.1f} GB")
         logging.info(f"APSP matrix size: {matrix_size_gb:.3f} GB per worker")
         logging.info(f"Using {n_jobs} parallel workers, {threads_per_worker} threads each")
 
@@ -545,7 +462,6 @@ def calculate_edge_parameters(
         v_x, v_y = v_node.get("x"), v_node.get("y")
 
         l_topo = 1
-
         length = data.get("length", 0)
 
         if u_x is not None and u_y is not None and v_x is not None and v_y is not None:
@@ -580,15 +496,13 @@ def calculate_global_parameters(
     graph: nx.MultiDiGraph,
     node_data: pd.DataFrame,
     edge_data: pd.DataFrame,
-    use_networkit: bool = True,
 ) -> dict:
-    """Calculate global network parameters.
+    """Calculate global network parameters using NetworKit.
 
     Args:
         graph: NetworkX MultiDiGraph.
         node_data: DataFrame with node parameters.
         edge_data: DataFrame with edge parameters.
-        use_networkit: Use NetworKit for diameter and avg shortest path (faster).
 
     Returns:
         Dictionary with global parameters.
@@ -616,78 +530,55 @@ def calculate_global_parameters(
     largest_cc = max(nx.weakly_connected_components(graph), key=len)
     subgraph = graph.subgraph(largest_cc)
 
-    if use_networkit:
-        logging.info("Computing diameter and avg shortest path using NetworKit...")
-        nk_subgraph, node_to_idx, _ = _nx_to_nk_graph(subgraph)
+    logging.info("Computing diameter and avg shortest path using NetworKit...")
+    nk_subgraph, node_to_idx, _ = _nx_to_nk_graph(subgraph)
 
-        try:
-            diam = nk.distance.Diameter(
-                nk_subgraph, algo=nk.distance.DiameterAlgo.EXACT
-            )
-            diam.run()
-            diameter = int(diam.getDiameter()[0])
-            logging.info(
-                f"Diameter calculated on largest connected component with {len(subgraph.nodes())} nodes"
-            )
-        except Exception as e:
-            logging.warning(f"NetworKit diameter failed: {e}, falling back to NetworkX")
-            try:
-                diameter = nx.diameter(subgraph.to_undirected())
-                logging.info(
-                    f"Diameter calculated using NetworkX on {len(subgraph.nodes())} nodes"
-                )
-            except nx.NetworkXError:
-                diameter = None
-                logging.warning(
-                    "Could not calculate diameter (graph may not be connected)"
-                )
-
-        try:
-            n = nk_subgraph.numberOfNodes()
-            total_dist = 0.0
-            count = 0
-            for u in range(n):
-                bfs = nk.distance.BFS(nk_subgraph, u)
-                bfs.run()
-                distances = bfs.getDistances()
-                for v in range(u + 1, n):
-                    dist = distances[v]
-                    if dist < 1e308:
-                        total_dist += dist
-                        count += 1
-            avg_shortest_path_topo = total_dist / count if count > 0 else None
-            logging.info("Average shortest path length (topological) calculated")
-        except Exception as e:
-            avg_shortest_path_topo = None
-            logging.warning(
-                f"Could not calculate average shortest path length (topological): {e}"
-            )
-    else:
+    try:
+        diam = nk.distance.Diameter(
+            nk_subgraph, algo=nk.distance.DiameterAlgo.EXACT
+        )
+        diam.run()
+        diameter = int(diam.getDiameter()[0])
+        logging.info(
+            f"Diameter calculated on largest connected component with {len(subgraph.nodes())} nodes"
+        )
+    except Exception as e:
+        logging.warning(f"NetworKit diameter failed: {e}, falling back to NetworkX")
         try:
             diameter = nx.diameter(subgraph.to_undirected())
             logging.info(
-                f"Diameter calculated on largest connected component with {len(subgraph.nodes())} nodes"
+                f"Diameter calculated using NetworkX on {len(subgraph.nodes())} nodes"
             )
         except nx.NetworkXError:
             diameter = None
-            logging.warning("Could not calculate diameter (graph may not be connected)")
-
-        undirected_subgraph = graph.to_undirected().subgraph(largest_cc)
-        try:
-            avg_shortest_path_topo = nx.average_shortest_path_length(
-                undirected_subgraph
-            )
-            logging.info("Average shortest path length (topological) calculated")
-        except nx.NetworkXError:
-            avg_shortest_path_topo = None
             logging.warning(
-                "Could not calculate average shortest path length (topological)"
+                "Could not calculate diameter (graph may not be connected)"
             )
+
+    try:
+        logging.info("Computing average shortest path length (topological) using APSP...")
+        nk.setNumberOfThreads(os.cpu_count() or 8)
+        apsp = nk.distance.APSP(nk_subgraph)
+        apsp.run()
+
+        n = nk_subgraph.numberOfNodes()
+        distances = np.array(apsp.getDistances(), dtype=np.float64)
+        np.fill_diagonal(distances, 0)
+        upper_triangle = np.triu(distances, k=1)
+        valid = (upper_triangle > 0) & (upper_triangle < 1e308)
+        total_dist = np.sum(upper_triangle[valid])
+        count = np.sum(valid)
+        avg_shortest_path_topo = total_dist / count if count > 0 else None
+        logging.info("Average shortest path length (topological) calculated")
+    except Exception as e:
+        avg_shortest_path_topo = None
+        logging.warning(
+            f"Could not calculate average shortest path length (topological): {e}"
+        )
 
     undirected_subgraph = graph.to_undirected().subgraph(largest_cc)
 
     try:
-        # Using physical length as weight
         avg_shortest_path_length = nx.average_shortest_path_length(
             undirected_subgraph, weight="length"
         )
@@ -697,7 +588,6 @@ def calculate_global_parameters(
         logging.warning("Could not calculate average shortest path length (physical)")
 
     try:
-        # Using Euclidean distance as weight
         avg_shortest_path_eucl = nx.average_shortest_path_length(
             undirected_subgraph, weight="l_eucl"
         )
@@ -707,7 +597,6 @@ def calculate_global_parameters(
         logging.warning("Could not calculate average shortest path length (Euclidean)")
 
     try:
-        # Using Manhattan distance as weight
         avg_shortest_path_manh = nx.average_shortest_path_length(
             undirected_subgraph, weight="l_manh"
         )
@@ -931,15 +820,9 @@ def save_results_txt(global_params: dict, output_path: Path):
 
 
 def main():
-    """Execute the main pipeline: load spatial data, filter intersecting zones, and download road network.
-
-    Returns:
-        Tuple containing filtered OD zones and the road network graph.
-    """
+    """Execute the main pipeline: load spatial data, filter zones, download network, and compute parameters."""
     setup_logging()
-    setup_gpu()
 
-    # Test run configuration
     TEST_RUN = True
     TEST_DISTRICTS = [80, 67]
 
@@ -960,13 +843,9 @@ def main():
     od_zones_filtered = filter_intersecting_zones(od_zones, basin_union)
     graph = load_graph_from_zones(od_zones_filtered)
 
-    # plot_graph(graph)
-
     node_params = calculate_node_parameters(graph)
     edge_params = calculate_edge_parameters(graph)
 
-    # Add parameters to graph BEFORE calculating global parameters
-    # so that edge attributes are available for weighted shortest paths
     graph = add_parameters_to_graph(graph, node_params, edge_params)
 
     global_params = calculate_global_parameters(graph, node_params, edge_params)

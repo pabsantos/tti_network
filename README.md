@@ -20,27 +20,16 @@ Geospatial network analysis project for the Tamanduateí basin (TTI). This proje
 - Python 3.13+
 - uv package manager
 - Docker (optional, for containerized execution)
-- NVIDIA GPU with CUDA 12 (optional, for GPU acceleration)
 
 ## Installation
 
-### Local Development (CPU only)
+### Local Development
 
 Install dependencies using uv:
 
 ```bash
 uv sync
 ```
-
-### Local Development (with GPU)
-
-For NVIDIA GPU acceleration, install with CUDA support:
-
-```bash
-uv sync --extra cuda
-```
-
-This installs `nx-cugraph` which automatically accelerates NetworkX operations on GPU.
 
 ### Docker
 
@@ -146,33 +135,20 @@ The docker-compose configuration mounts the following volumes:
 
 ## Performance
 
-The project supports multiple acceleration backends with automatic detection:
-
-### Acceleration Priority
-
-1. **GPU (nx-cugraph)** - Fastest, requires NVIDIA GPU with CUDA
-2. **NetworKit (CPU)** - Fast, C++ backend
-3. **NetworkX + joblib (CPU)** - Fallback with parallel processing
+All graph computations use **NetworKit** (C++ backend), providing ~50x speedup over pure NetworkX.
 
 ### Optimized Operations
 
-| Operation | nx-cugraph (GPU) | NetworKit (CPU) | NetworkX |
-|-----------|------------------|-----------------|----------|
-| Node betweenness | ~100-500x | ~50x | 1x |
-| Edge betweenness | ~100-500x | ~50x | 1x |
-| Clustering coefficient | ~50-100x | ~20x | 1x |
-| BFS/Shortest paths | ~100x | ~50x | 1x |
+| Operation | Backend |
+|-----------|---------|
+| Node betweenness centrality | `nk.centrality.Betweenness` |
+| Edge betweenness centrality | `nk.centrality.Betweenness(computeEdgeCentrality=True)` |
+| Clustering coefficient | `nk.centrality.LocalClusteringCoefficient` |
+| Diameter | `nk.distance.Diameter` |
+| All-Pairs Shortest Paths | `nk.distance.APSP` |
 
-### Parallel Processing (CPU)
+### Parallel Processing
 
-When GPU is not available, edge vulnerability computation uses all available CPU cores via `joblib`:
-- Apple M1: 8 cores
-- Desktop CPUs: scales to 12+ cores
-
-### Estimated Runtime (55k nodes, 100k edges)
-
-| Configuration | Time |
-|---------------|------|
-| NetworkX only (sequential) | ~weeks |
-| NetworKit (CPU) | ~hours |
-| nx-cugraph (RTX 4090) | ~minutes |
+- **Vulnerability computation**: Uses `joblib` to parallelize across edges, with each worker computing APSP internally via NetworKit
+- **Memory-aware parallelization**: Number of workers is automatically limited based on available system RAM (each APSP matrix requires O(N^2) memory)
+- **APSP (All-Pairs Shortest Paths)**: Used for efficiency calculations and average shortest path computation when RAM permits
