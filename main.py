@@ -205,14 +205,15 @@ def _nx_to_nk_graph(graph: nx.MultiDiGraph) -> tuple[nk.Graph, dict, dict]:
     return nk_graph, node_to_idx, idx_to_node
 
 
-def _calculate_efficiency_apsp(nk_graph: nk.Graph) -> float:
-    """Calculate global efficiency using NetworKit APSP.
+def _calculate_efficiency_bfs(nk_graph: nk.Graph, sample_size: int = None) -> float:
+    """Calculate global efficiency using incremental BFS (memory efficient).
 
-    Uses all available CPU threads internally for parallel BFS.
-    Requires O(N^2) memory for the distance matrix.
+    Uses O(N) memory instead of O(N^2) by processing one source at a time.
+    Optionally samples source nodes for faster approximate computation.
 
     Args:
         nk_graph: NetworKit Graph.
+        sample_size: If set, sample this many source nodes for approximation.
 
     Returns:
         Global efficiency value.
@@ -221,37 +222,44 @@ def _calculate_efficiency_apsp(nk_graph: nk.Graph) -> float:
     if n <= 1:
         return 0.0
 
-    apsp = nk.distance.APSP(nk_graph)
-    apsp.run()
+    if sample_size is not None and sample_size < n:
+        sources = np.random.choice(n, size=sample_size, replace=False)
+        scale_factor = n / sample_size
+    else:
+        sources = range(n)
+        scale_factor = 1.0
 
-    distances = np.array(apsp.getDistances(), dtype=np.float64)
-    np.fill_diagonal(distances, 0)
-    valid = (distances > 0) & (distances < 1e308)
-    total_efficiency = np.sum(1.0 / distances[valid])
+    total_efficiency = 0.0
+    for source in sources:
+        bfs = nk.distance.BFS(nk_graph, source)
+        bfs.run()
+        distances = bfs.getDistances()
+        for target, dist in enumerate(distances):
+            if target != source and 0 < dist < 1e308:
+                total_efficiency += 1.0 / dist
 
-    return total_efficiency / (n * (n - 1))
+    return (total_efficiency * scale_factor) / (n * (n - 1))
 
 
-def _compute_vulnerability_apsp(
-    nk_graph: nk.Graph, u_idx: int, v_idx: int, base_efficiency: float, n_threads: int
+def _compute_vulnerability_bfs(
+    nk_graph: nk.Graph, u_idx: int, v_idx: int, base_efficiency: float, sample_size: int = None
 ) -> float:
-    """Compute vulnerability for a single edge using APSP.
+    """Compute vulnerability for a single edge using BFS (memory efficient).
 
     Args:
         nk_graph: NetworKit Graph.
         u_idx: Source node index.
         v_idx: Target node index.
         base_efficiency: Base global efficiency.
-        n_threads: Number of threads for APSP.
+        sample_size: Sample size for efficiency approximation.
 
     Returns:
         Vulnerability value.
     """
-    nk.setNumberOfThreads(n_threads)
     graph_copy = nk.Graph(nk_graph)
     if graph_copy.hasEdge(u_idx, v_idx):
         graph_copy.removeEdge(u_idx, v_idx)
-    eff_without = _calculate_efficiency_apsp(graph_copy)
+    eff_without = _calculate_efficiency_bfs(graph_copy, sample_size)
     if base_efficiency > 0:
         return (base_efficiency - eff_without) / base_efficiency
     return 0.0
@@ -413,24 +421,15 @@ def calculate_edge_parameters(
     n_edges = len(edges_list)
 
     if compute_vulnerability:
-        logging.info("Computing edge vulnerability using NetworKit APSP (parallel)...")
+        logging.info("Computing edge vulnerability using BFS (memory efficient)...")
         nk_graph, node_to_idx, idx_to_node = _nx_to_nk_graph(graph)
 
-        logging.info("Computing base global efficiency (APSP)...")
-        nk.setNumberOfThreads(os.cpu_count() or 8)
-        base_efficiency = _calculate_efficiency_apsp(nk_graph)
+        logging.info("Computing base global efficiency...")
+        base_efficiency = _calculate_efficiency_bfs(nk_graph)
         logging.info(f"Base global efficiency: {base_efficiency:.6f}")
 
-        n_nodes = nk_graph.numberOfNodes()
-        matrix_size_gb = (n_nodes**2 * 8) / (1024**3)
-        available_ram_gb = _get_available_ram_gb()
-        max_workers_by_ram = max(1, int(available_ram_gb / max(matrix_size_gb, 0.001)))
-        n_jobs = min(os.cpu_count() or 8, max_workers_by_ram)
-        threads_per_worker = max(1, (os.cpu_count() or 8) // n_jobs)
-
-        logging.info(f"Available RAM: {available_ram_gb:.1f} GB")
-        logging.info(f"APSP matrix size: {matrix_size_gb:.3f} GB per worker")
-        logging.info(f"Using {n_jobs} parallel workers, {threads_per_worker} threads each")
+        n_jobs = os.cpu_count() or 8
+        logging.info(f"Using {n_jobs} parallel workers")
 
         edge_indices = []
         for u, v, key, _ in edges_list:
@@ -438,12 +437,12 @@ def calculate_edge_parameters(
             edge_indices.append((u_idx, v_idx))
 
         vulnerabilities = Parallel(n_jobs=n_jobs, verbose=10)(
-            delayed(_compute_vulnerability_apsp)(
-                nk_graph, u_idx, v_idx, base_efficiency, threads_per_worker
+            delayed(_compute_vulnerability_bfs)(
+                nk_graph, u_idx, v_idx, base_efficiency
             )
             for u_idx, v_idx in edge_indices
         )
-        logging.info("APSP vulnerability computation completed")
+        logging.info("Vulnerability computation completed")
     else:
         logging.info("Skipping edge vulnerability calculation (disabled)")
         vulnerabilities = [0.0] * n_edges
@@ -556,18 +555,19 @@ def calculate_global_parameters(
             )
 
     try:
-        logging.info("Computing average shortest path length (topological) using APSP...")
-        nk.setNumberOfThreads(os.cpu_count() or 8)
-        apsp = nk.distance.APSP(nk_subgraph)
-        apsp.run()
-
+        logging.info("Computing average shortest path length (topological) using BFS...")
         n = nk_subgraph.numberOfNodes()
-        distances = np.array(apsp.getDistances(), dtype=np.float64)
-        np.fill_diagonal(distances, 0)
-        upper_triangle = np.triu(distances, k=1)
-        valid = (upper_triangle > 0) & (upper_triangle < 1e308)
-        total_dist = np.sum(upper_triangle[valid])
-        count = np.sum(valid)
+        total_dist = 0.0
+        count = 0
+        for source in range(n):
+            bfs = nk.distance.BFS(nk_subgraph, source)
+            bfs.run()
+            distances = bfs.getDistances()
+            for target in range(source + 1, n):
+                dist = distances[target]
+                if 0 < dist < 1e308:
+                    total_dist += dist
+                    count += 1
         avg_shortest_path_topo = total_dist / count if count > 0 else None
         logging.info("Average shortest path length (topological) calculated")
     except Exception as e:
