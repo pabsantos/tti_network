@@ -1,0 +1,30 @@
+{
+"type": "FeatureCollection",
+"name": "stations",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "posto": 143, "lon": -46.544628, "lat": -23.61085, "nome": "Rio Tamanduateí - Prosperidade" }, "geometry": { "type": "Point", "coordinates": [ -46.544628, -23.61085 ] } },
+{ "type": "Feature", "properties": { "posto": 275, "lon": -46.614164, "lat": -23.581933, "nome": "Córrego Ipiranga- Rua Coronel Diogo" }, "geometry": { "type": "Point", "coordinates": [ -46.614164, -23.581933 ] } },
+{ "type": "Feature", "properties": { "posto": 279, "lon": -46.5862497846, "lat": -23.6477769426, "nome": "Ribeirão dos Couros - Jd Taboão" }, "geometry": { "type": "Point", "coordinates": [ -46.5862497846, -23.6477769426 ] } },
+{ "type": "Feature", "properties": { "posto": 280, "lon": -46.544318, "lat": -23.608315, "nome": "Córrego Oratório - Vila Prudente" }, "geometry": { "type": "Point", "coordinates": [ -46.544318, -23.608315 ] } },
+{ "type": "Feature", "properties": { "posto": 283, "lon": -46.599463806499998, "lat": -23.582169370100001, "nome": "Rio Tamanduateí - Vd. Pacheco Chaves" }, "geometry": { "type": "Point", "coordinates": [ -46.599463806499998, -23.582169370100001 ] } },
+{ "type": "Feature", "properties": { "posto": 413, "lon": -46.628423, "lat": -23.541539, "nome": "Rio Tamanduateí - Mercado Municipal" }, "geometry": { "type": "Point", "coordinates": [ -46.628423, -23.541539 ] } },
+{ "type": "Feature", "properties": { "posto": 511, "lon": -46.56667, "lat": -23.67, "nome": "Rudge Ramos" }, "geometry": { "type": "Point", "coordinates": [ -46.56667, -23.67 ] } },
+{ "type": "Feature", "properties": { "posto": 563, "lon": -46.627853, "lat": -23.619963, "nome": "Córrego Ipiranga - Pç. Leonor Kaupa (PMSP/IP-02)" }, "geometry": { "type": "Point", "coordinates": [ -46.627853, -23.619963 ] } },
+{ "type": "Feature", "properties": { "posto": 629, "lon": -46.597368, "lat": -23.595544, "nome": "Córrego Moinho Velho  - R. Dois de Julho (PMSP/IP-03)" }, "geometry": { "type": "Point", "coordinates": [ -46.597368, -23.595544 ] } },
+{ "type": "Feature", "properties": { "posto": 1000350, "lon": -46.580069, "lat": -23.686132, "nome": "Ribeirão dos Couros - Mercedes Bens" }, "geometry": { "type": "Point", "coordinates": [ -46.580069, -23.686132 ] } },
+{ "type": "Feature", "properties": { "posto": 1000370, "lon": -46.586149, "lat": -23.69609, "nome": "Ribeirão dos Couros - Piraporinha Casa Grande" }, "geometry": { "type": "Point", "coordinates": [ -46.586149, -23.69609 ] } },
+{ "type": "Feature", "properties": { "posto": 1000390, "lon": -46.552189, "lat": -23.733222, "nome": "Ribeirão dos Meninos - Volks Demarch" }, "geometry": { "type": "Point", "coordinates": [ -46.552189, -23.733222 ] } },
+{ "type": "Feature", "properties": { "posto": 1000400, "lon": -46.541111, "lat": -23.732476, "nome": "Córrego Chrysler" }, "geometry": { "type": "Point", "coordinates": [ -46.541111, -23.732476 ] } },
+{ "type": "Feature", "properties": { "posto": 1000410, "lon": -46.577271, "lat": -23.669418, "nome": "Ribeirão dos Couros - Mercedes Paulicéia" }, "geometry": { "type": "Point", "coordinates": [ -46.577271, -23.669418 ] } },
+{ "type": "Feature", "properties": { "posto": 1000420, "lon": -46.531598, "lat": -23.708228, "nome": "Córrego Saracantan - Canarinho" }, "geometry": { "type": "Point", "coordinates": [ -46.531598, -23.708228 ] } },
+{ "type": "Feature", "properties": { "posto": 1000430, "lon": -46.585491, "lat": -23.652025, "nome": "Ribeirão dos Couros - Ford" }, "geometry": { "type": "Point", "coordinates": [ -46.585491, -23.652025 ] } },
+{ "type": "Feature", "properties": { "posto": 1000490, "lon": -46.47238, "lat": -23.656435, "nome": "Rio Tamanduateí - Vila Santa Cecília" }, "geometry": { "type": "Point", "coordinates": [ -46.47238, -23.656435 ] } },
+{ "type": "Feature", "properties": { "posto": 1000500, "lon": -46.477071, "lat": -23.627795, "nome": "Oratório" }, "geometry": { "type": "Point", "coordinates": [ -46.477071, -23.627795 ] } },
+{ "type": "Feature", "properties": { "posto": 1000510, "lon": -46.448729, "lat": -23.653057, "nome": "Rio Corumbé - Jd. Zaíra" }, "geometry": { "type": "Point", "coordinates": [ -46.448729, -23.653057 ] } },
+{ "type": "Feature", "properties": { "posto": 1000550, "lon": -46.578836, "lat": -23.689963, "nome": "Ribeirão dos Couros - Mercedes Bens" }, "geometry": { "type": "Point", "coordinates": [ -46.578836, -23.689963 ] } },
+{ "type": "Feature", "properties": { "posto": 1000837, "lon": -46.656168, "lat": -23.552718, "nome": "CGE - R. Bela Cintra" }, "geometry": { "type": "Point", "coordinates": [ -46.656168, -23.552718 ] } },
+{ "type": "Feature", "properties": { "posto": 1000839, "lon": -46.583518, "lat": -23.632978, "nome": "Ribeirão dos Meninos - Clube São José" }, "geometry": { "type": "Point", "coordinates": [ -46.583518, -23.632978 ] } },
+{ "type": "Feature", "properties": { "posto": 1000867, "lon": -46.532528, "lat": -23.752079, "nome": "Riacho Grande" }, "geometry": { "type": "Point", "coordinates": [ -46.532528, -23.752079 ] } }
+]
+}

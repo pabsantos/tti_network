@@ -513,18 +513,13 @@ def calculate_global_parameters(
 
     avg_degree = node_data["k_i"].mean()
     avg_clustering = node_data["c_i"].mean()
-    avg_l_topo = edge_data["l_topo"].replace(float("inf"), -1).mean()
     avg_l_eucl = edge_data["l_eucl"].mean()
     avg_l_manh = edge_data["l_manh"].mean()
     avg_length = edge_data["length"].mean()
 
-    max_degree = node_data["k_i"].max()
-    max_clustering = node_data["c_i"].max()
-    max_l_topo = int(edge_data["l_topo"].replace(float("inf"), -1).max())
     max_l_eucl = edge_data["l_eucl"].max()
     max_l_manh = edge_data["l_manh"].max()
     max_length = edge_data["length"].max()
-    max_edge_vulnerability = edge_data["v_ij"].max()
 
     largest_cc = max(nx.weakly_connected_components(graph), key=len)
     subgraph = graph.subgraph(largest_cc)
@@ -605,27 +600,38 @@ def calculate_global_parameters(
         avg_shortest_path_manh = None
         logging.warning("Could not calculate average shortest path length (Manhattan)")
 
+    p_random = (2 * L) / (N * (N - 1)) if N > 1 else 0
+    k_star = p_random * (N - 1)
+    c_star = k_star / N if N > 0 else 0
+    l_star = np.log(N) / np.log(k_star) if k_star > 1 else None
+
+    logging.info(
+        f"Theoretical random graph G(N,p): p={p_random:.6f}, k*={k_star:.4f}, "
+        f"c*={c_star:.6f}, l*={l_star:.4f}" if l_star is not None
+        else f"Theoretical random graph G(N,p): p={p_random:.6f}, k*={k_star:.4f}, "
+        f"c*={c_star:.6f}, l*=N/A"
+    )
+
     global_params = {
         "N": N,
         "L": L,
         "avg_k": avg_degree,
         "avg_c": avg_clustering,
-        "avg_l_topo": avg_l_topo,
         "avg_l_eucl": avg_l_eucl,
         "avg_l_manh": avg_l_manh,
         "avg_length": avg_length,
-        "max_k": max_degree,
-        "max_c": max_clustering,
-        "max_l_topo": max_l_topo,
         "max_l_eucl": max_l_eucl,
         "max_l_manh": max_l_manh,
         "max_length": max_length,
-        "max_v_edge": max_edge_vulnerability,
         "diameter_D": diameter,
         "avg_shortest_path_topo": avg_shortest_path_topo,
         "avg_shortest_path_length": avg_shortest_path_length,
         "avg_shortest_path_eucl": avg_shortest_path_eucl,
         "avg_shortest_path_manh": avg_shortest_path_manh,
+        "p_random": p_random,
+        "k_star": k_star,
+        "c_star": c_star,
+        "l_star": l_star,
     }
 
     logging.info(f"Global parameters calculated: N={N}, L={L}")
@@ -718,11 +724,6 @@ def save_results_txt(global_params: dict, output_path: Path):
             )
         )
         f.write(
-            "Average topological distance (<l_topo>): {:.4f} edges\n".format(
-                global_params["avg_l_topo"]
-            )
-        )
-        f.write(
             "Average Euclidean distance (<l_eucl>): {:.4f} m\n".format(
                 global_params["avg_l_eucl"]
             )
@@ -780,41 +781,36 @@ def save_results_txt(global_params: dict, output_path: Path):
 
         f.write("Maximum Parameters:\n")
         f.write("-" * 50 + "\n")
-        f.write("Maximum degree (k*): {}\n".format(global_params["max_k"]))
         f.write(
-            "Maximum clustering coefficient (c*): {:.4f}\n".format(
-                global_params["max_c"]
-            )
-        )
-        f.write(
-            "Maximum topological distance (l_topo*): {} edges\n".format(
-                global_params["max_l_topo"]
-            )
-        )
-        f.write(
-            "Maximum Euclidean distance (l_eucl*): {:.4f} m\n".format(
+            "Maximum Euclidean distance (max_l_eucl): {:.4f} m\n".format(
                 global_params["max_l_eucl"]
             )
         )
         f.write(
-            "Maximum Manhattan distance (l_manh*): {:.4f} m\n".format(
+            "Maximum Manhattan distance (max_l_manh): {:.4f} m\n".format(
                 global_params["max_l_manh"]
             )
         )
         f.write(
-            "Maximum physical length (length*): {:.4f} m\n".format(
+            "Maximum physical length (max_length): {:.4f} m\n".format(
                 global_params["max_length"]
-            )
-        )
-        f.write(
-            "Maximum edge vulnerability (v_edge*): {:.6f}\n".format(
-                global_params["max_v_edge"]
             )
         )
         if global_params["diameter_D"] is not None:
             f.write("Diameter (D): {}\n".format(global_params["diameter_D"]))
         else:
             f.write("Diameter (D): N/A (graph not fully connected)\n")
+        f.write("\n")
+
+        f.write("Theoretical Random Graph G(N, p):\n")
+        f.write("-" * 50 + "\n")
+        f.write("p = 2L / N(N-1): {:.6f}\n".format(global_params["p_random"]))
+        f.write("k* = p(N-1): {:.4f}\n".format(global_params["k_star"]))
+        f.write("c* = k*/N: {:.6f}\n".format(global_params["c_star"]))
+        if global_params["l_star"] is not None:
+            f.write("l* = logN/logk*: {:.4f}\n".format(global_params["l_star"]))
+        else:
+            f.write("l* = logN/logk*: N/A (k* <= 1)\n")
 
     logging.info(f"Results saved to {output_path}")
 
