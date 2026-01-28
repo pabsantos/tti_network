@@ -11,6 +11,7 @@ import osmnx as ox
 import pandas as pd
 import pyproj
 from joblib import Parallel, delayed
+from shapely.geometry import Point
 
 
 def _get_available_ram_gb() -> float:
@@ -265,6 +266,29 @@ def _compute_vulnerability_bfs(
     return 0.0
 
 
+def _compute_node_vulnerability_bfs(
+    nk_graph: nk.Graph, node_idx: int, base_efficiency: float, sample_size: int = None
+) -> float:
+    """Compute vulnerability for a single node using BFS.
+
+    Args:
+        nk_graph: NetworKit Graph.
+        node_idx: Node index to isolate.
+        base_efficiency: Base global efficiency.
+        sample_size: Sample size for efficiency approximation.
+
+    Returns:
+        Vulnerability value.
+    """
+    graph_copy = nk.Graph(nk_graph)
+    for neighbor in list(graph_copy.iterNeighbors(node_idx)):
+        graph_copy.removeEdge(node_idx, neighbor)
+    eff_without = _calculate_efficiency_bfs(graph_copy, sample_size)
+    if base_efficiency > 0:
+        return (base_efficiency - eff_without) / base_efficiency
+    return 0.0
+
+
 def _compute_clustering_networkit(graph: nx.MultiDiGraph) -> dict:
     """Compute local clustering coefficient using NetworKit.
 
@@ -396,17 +420,14 @@ def calculate_node_parameters(graph: nx.MultiDiGraph) -> pd.DataFrame:
     return node_data
 
 
-def calculate_edge_parameters(
-    graph: nx.MultiDiGraph, compute_vulnerability: bool = True
-) -> pd.DataFrame:
+def calculate_edge_parameters(graph: nx.MultiDiGraph) -> pd.DataFrame:
     """Calculate parameters for each edge using NetworKit.
 
     Args:
         graph: NetworkX MultiDiGraph.
-        compute_vulnerability: Whether to compute edge vulnerability (expensive).
 
     Returns:
-        DataFrame with edge parameters (l_topo, l_eucl, l_manh, length, e_ij, v_ij).
+        DataFrame with edge parameters (l_topo, l_eucl, l_manh, length, e_ij).
     """
     logging.info("Calculating edge parameters...")
 
@@ -420,38 +441,11 @@ def calculate_edge_parameters(
     edges_list = list(graph.edges(keys=True, data=True))
     n_edges = len(edges_list)
 
-    if compute_vulnerability:
-        logging.info("Computing edge vulnerability using BFS (memory efficient)...")
-        nk_graph, node_to_idx, idx_to_node = _nx_to_nk_graph(graph)
-
-        logging.info("Computing base global efficiency...")
-        base_efficiency = _calculate_efficiency_bfs(nk_graph)
-        logging.info(f"Base global efficiency: {base_efficiency:.6f}")
-
-        n_jobs = os.cpu_count() or 8
-        logging.info(f"Using {n_jobs} parallel workers")
-
-        edge_indices = []
-        for u, v, key, _ in edges_list:
-            u_idx, v_idx = node_to_idx[u], node_to_idx[v]
-            edge_indices.append((u_idx, v_idx))
-
-        vulnerabilities = Parallel(n_jobs=n_jobs, verbose=10)(
-            delayed(_compute_vulnerability_bfs)(
-                nk_graph, u_idx, v_idx, base_efficiency
-            )
-            for u_idx, v_idx in edge_indices
-        )
-        logging.info("Vulnerability computation completed")
-    else:
-        logging.info("Skipping edge vulnerability calculation (disabled)")
-        vulnerabilities = [0.0] * n_edges
-
     logging.info("Computing distance metrics for edges...")
     edges_data = []
     geod = pyproj.Geod(ellps="WGS84")
 
-    for i, ((u, v, key, data), vuln) in enumerate(zip(edges_list, vulnerabilities), 1):
+    for i, (u, v, key, data) in enumerate(edges_list, 1):
         if i % 500 == 0 or i == n_edges:
             logging.info(f"Processing edge metrics {i}/{n_edges}")
 
@@ -482,13 +476,114 @@ def calculate_edge_parameters(
                 "l_manh": l_manh,
                 "length": length,
                 "e_ij": edge_betweenness.get((u, v, key), 0),
-                "v_ij": vuln,
             }
         )
 
     edge_df = pd.DataFrame(edges_data)
     logging.info(f"Edge parameters calculated for {len(edge_df)} edges")
     return edge_df
+
+
+def calculate_vulnerability_near_station(
+    graph: nx.MultiDiGraph,
+    od_zones: gpd.GeoDataFrame,
+    station_path: str,
+    station_id: int,
+    radius_m: float = 1000,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Calculate node and edge vulnerability near a hydrological station.
+
+    Filters OD zones intersecting a buffer around the station,
+    identifies graph elements within those zones, and computes
+    vulnerability only for those elements.
+
+    Args:
+        graph: NetworkX MultiDiGraph.
+        od_zones: GeoDataFrame with OD zones.
+        station_path: Path to stations GeoJSON.
+        station_id: Station ID to filter.
+        radius_m: Buffer radius in meters.
+
+    Returns:
+        Tuple of (node vulnerability DataFrame, edge vulnerability DataFrame).
+    """
+    logging.info(f"Loading station {station_id} from {station_path}...")
+    stations = gpd.read_file(station_path)
+    station = stations[stations["posto"] == station_id]
+    if station.empty:
+        raise ValueError(f"Station {station_id} not found")
+
+    station_proj = station.to_crs(epsg=31983)
+    logging.info(f"Creating {radius_m}m buffer around station {station_id}...")
+    buffer = station_proj.geometry.buffer(radius_m).union_all()
+
+    od_zones_proj = od_zones.to_crs(epsg=31983)
+    zones_near = od_zones[od_zones_proj.intersects(buffer)]
+    logging.info(f"Found {len(zones_near)} OD zones near station {station_id}")
+
+    if zones_near.empty:
+        logging.warning("No OD zones found near the station")
+        return (
+            pd.DataFrame(columns=["node", "v_i"]),
+            pd.DataFrame(columns=["u", "v", "key", "v_ij"]),
+        )
+
+    zones_union = zones_near.to_crs(epsg=4326).union_all()
+
+    logging.info("Identifying graph nodes within filtered zones...")
+    node_points = []
+    for node, data in graph.nodes(data=True):
+        x, y = data.get("x"), data.get("y")
+        if x is not None and y is not None:
+            node_points.append({"node": node, "geometry": Point(x, y)})
+
+    nodes_gdf = gpd.GeoDataFrame(node_points, crs="EPSG:4326")
+    nodes_in_zones = nodes_gdf[nodes_gdf.within(zones_union)]
+    node_ids = set(nodes_in_zones["node"].values)
+    logging.info(f"Found {len(node_ids)} nodes within filtered zones")
+
+    edges_in_zones = [
+        (u, v, key)
+        for u, v, key in graph.edges(keys=True)
+        if u in node_ids or v in node_ids
+    ]
+    logging.info(f"Found {len(edges_in_zones)} edges within filtered zones")
+
+    logging.info("Computing base global efficiency...")
+    nk_graph, node_to_idx, _ = _nx_to_nk_graph(graph)
+    base_efficiency = _calculate_efficiency_bfs(nk_graph)
+    logging.info(f"Base global efficiency: {base_efficiency:.6f}")
+
+    n_jobs = os.cpu_count() or 8
+
+    logging.info(f"Computing node vulnerability for {len(node_ids)} nodes...")
+    node_list = sorted(node_ids)
+    node_vulns = Parallel(n_jobs=n_jobs, verbose=10)(
+        delayed(_compute_node_vulnerability_bfs)(
+            nk_graph, node_to_idx[node], base_efficiency
+        )
+        for node in node_list
+    )
+    node_vuln_df = pd.DataFrame({"node": node_list, "v_i": node_vulns})
+
+    logging.info(f"Computing edge vulnerability for {len(edges_in_zones)} edges...")
+    edge_vulns = Parallel(n_jobs=n_jobs, verbose=10)(
+        delayed(_compute_vulnerability_bfs)(
+            nk_graph, node_to_idx[u], node_to_idx[v], base_efficiency
+        )
+        for u, v, _ in edges_in_zones
+    )
+    edge_vuln_df = pd.DataFrame(
+        {
+            "u": [e[0] for e in edges_in_zones],
+            "v": [e[1] for e in edges_in_zones],
+            "key": [e[2] for e in edges_in_zones],
+            "v_ij": edge_vulns,
+        }
+    )
+
+    logging.info("Vulnerability calculation near station completed")
+    return node_vuln_df, edge_vuln_df
 
 
 def calculate_global_parameters(
@@ -659,6 +754,7 @@ def add_parameters_to_graph(
         graph.nodes[node]["c_i"] = float(row["c_i"])
         graph.nodes[node]["b_i"] = float(row["b_i"])
         graph.nodes[node]["avg_l_i"] = float(row["avg_l_i"])
+        graph.nodes[node]["v_i"] = float(row["v_i"])
 
     for _, row in edge_data.iterrows():
         u, v, key = row["u"], row["v"], int(row["key"])
@@ -824,6 +920,7 @@ def main():
 
     PATH_TTI_SHAPE = "data/raw/tti_shape/Microbacias_Tamanduatei.shp"
     PATH_OD_ZONES = "data/raw/od_zones/Zonas_2023.shp"
+    PATH_STATIONS = "data/raw/stations.geojson"
 
     tti_basin = load_tti_basin(PATH_TTI_SHAPE)
     od_zones = load_od_zones(PATH_OD_ZONES)
@@ -841,6 +938,14 @@ def main():
 
     node_params = calculate_node_parameters(graph)
     edge_params = calculate_edge_parameters(graph)
+
+    node_vuln, edge_vuln = calculate_vulnerability_near_station(
+        graph, od_zones_filtered, PATH_STATIONS, 413
+    )
+    node_params = node_params.merge(node_vuln, on="node", how="left")
+    node_params["v_i"] = node_params["v_i"].fillna(0.0)
+    edge_params = edge_params.merge(edge_vuln, on=["u", "v", "key"], how="left")
+    edge_params["v_ij"] = edge_params["v_ij"].fillna(0.0)
 
     graph = add_parameters_to_graph(graph, node_params, edge_params)
 
