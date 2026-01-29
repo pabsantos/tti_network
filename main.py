@@ -206,7 +206,87 @@ def _nx_to_nk_graph(graph: nx.MultiDiGraph) -> tuple[nk.Graph, dict, dict]:
     return nk_graph, node_to_idx, idx_to_node
 
 
-def _calculate_efficiency_bfs(nk_graph: nk.Graph, sample_size: int = None) -> float:
+def _dijkstra_sum_for_source(graph: nx.Graph, source, weight: str) -> float:
+    """Compute sum of weighted distances from source to all other nodes.
+
+    Args:
+        graph: NetworkX Graph.
+        source: Source node.
+        weight: Edge weight attribute name.
+
+    Returns:
+        Sum of distances from source to all reachable nodes.
+    """
+    lengths = nx.single_source_dijkstra_path_length(graph, source, weight=weight)
+    return sum(lengths.values())
+
+
+def _parallel_avg_shortest_path(graph: nx.Graph, weight: str) -> float:
+    """Calculate average shortest path length using parallel Dijkstra.
+
+    Args:
+        graph: NetworkX Graph.
+        weight: Edge weight attribute name.
+
+    Returns:
+        Average shortest path length.
+    """
+    nodes = list(graph.nodes())
+    n = len(nodes)
+    results = Parallel(n_jobs=os.cpu_count())(
+        delayed(_dijkstra_sum_for_source)(graph, node, weight) for node in nodes
+    )
+    total = sum(results)
+    return total / (n * (n - 1))
+
+
+def _bfs_distances_for_source(nk_graph: nk.Graph, source: int, n: int) -> tuple[float, int]:
+    """Compute sum of distances from source to all higher-indexed nodes.
+
+    Args:
+        nk_graph: NetworKit Graph.
+        source: Source node index.
+        n: Total number of nodes.
+
+    Returns:
+        Tuple of (total_distance, count_of_valid_pairs).
+    """
+    bfs = nk.distance.BFS(nk_graph, source)
+    bfs.run()
+    distances = bfs.getDistances()
+    total_dist = 0.0
+    count = 0
+    for target in range(source + 1, n):
+        dist = distances[target]
+        if 0 < dist < 1e308:
+            total_dist += dist
+            count += 1
+    return total_dist, count
+
+
+def _efficiency_for_source(nk_graph: nk.Graph, source: int) -> float:
+    """Compute efficiency contribution from a single source node.
+
+    Args:
+        nk_graph: NetworKit Graph.
+        source: Source node index.
+
+    Returns:
+        Sum of 1/distance for all reachable nodes from source.
+    """
+    bfs = nk.distance.BFS(nk_graph, source)
+    bfs.run()
+    distances = bfs.getDistances()
+    total = 0.0
+    for target, dist in enumerate(distances):
+        if target != source and 0 < dist < 1e308:
+            total += 1.0 / dist
+    return total
+
+
+def _calculate_efficiency_bfs(
+    nk_graph: nk.Graph, sample_size: int = None, parallel: bool = True
+) -> float:
     """Calculate global efficiency using incremental BFS (memory efficient).
 
     Uses O(N) memory instead of O(N^2) by processing one source at a time.
@@ -215,6 +295,7 @@ def _calculate_efficiency_bfs(nk_graph: nk.Graph, sample_size: int = None) -> fl
     Args:
         nk_graph: NetworKit Graph.
         sample_size: If set, sample this many source nodes for approximation.
+        parallel: If True, use parallel processing (disable for nested calls).
 
     Returns:
         Global efficiency value.
@@ -224,20 +305,21 @@ def _calculate_efficiency_bfs(nk_graph: nk.Graph, sample_size: int = None) -> fl
         return 0.0
 
     if sample_size is not None and sample_size < n:
-        sources = np.random.choice(n, size=sample_size, replace=False)
+        sources = list(np.random.choice(n, size=sample_size, replace=False))
         scale_factor = n / sample_size
     else:
-        sources = range(n)
+        sources = list(range(n))
         scale_factor = 1.0
 
-    total_efficiency = 0.0
-    for source in sources:
-        bfs = nk.distance.BFS(nk_graph, source)
-        bfs.run()
-        distances = bfs.getDistances()
-        for target, dist in enumerate(distances):
-            if target != source and 0 < dist < 1e308:
-                total_efficiency += 1.0 / dist
+    if parallel and len(sources) > 100:
+        results = Parallel(n_jobs=os.cpu_count())(
+            delayed(_efficiency_for_source)(nk_graph, source) for source in sources
+        )
+        total_efficiency = sum(results)
+    else:
+        total_efficiency = 0.0
+        for source in sources:
+            total_efficiency += _efficiency_for_source(nk_graph, source)
 
     return (total_efficiency * scale_factor) / (n * (n - 1))
 
@@ -260,7 +342,7 @@ def _compute_vulnerability_bfs(
     graph_copy = nk.Graph(nk_graph)
     if graph_copy.hasEdge(u_idx, v_idx):
         graph_copy.removeEdge(u_idx, v_idx)
-    eff_without = _calculate_efficiency_bfs(graph_copy, sample_size)
+    eff_without = _calculate_efficiency_bfs(graph_copy, sample_size, parallel=False)
     if base_efficiency > 0:
         return (base_efficiency - eff_without) / base_efficiency
     return 0.0
@@ -283,7 +365,7 @@ def _compute_node_vulnerability_bfs(
     graph_copy = nk.Graph(nk_graph)
     for neighbor in list(graph_copy.iterNeighbors(node_idx)):
         graph_copy.removeEdge(node_idx, neighbor)
-    eff_without = _calculate_efficiency_bfs(graph_copy, sample_size)
+    eff_without = _calculate_efficiency_bfs(graph_copy, sample_size, parallel=False)
     if base_efficiency > 0:
         return (base_efficiency - eff_without) / base_efficiency
     return 0.0
@@ -645,19 +727,16 @@ def calculate_global_parameters(
             )
 
     try:
-        logging.info("Computing average shortest path length (topological) using BFS...")
+        logging.info("Computing average shortest path length (topological) using parallel BFS...")
         n = nk_subgraph.numberOfNodes()
-        total_dist = 0.0
-        count = 0
-        for source in range(n):
-            bfs = nk.distance.BFS(nk_subgraph, source)
-            bfs.run()
-            distances = bfs.getDistances()
-            for target in range(source + 1, n):
-                dist = distances[target]
-                if 0 < dist < 1e308:
-                    total_dist += dist
-                    count += 1
+        n_jobs = os.cpu_count()
+        logging.info(f"Using {n_jobs} parallel workers for {n} BFS computations")
+        results = Parallel(n_jobs=n_jobs, verbose=10)(
+            delayed(_bfs_distances_for_source)(nk_subgraph, source, n)
+            for source in range(n)
+        )
+        total_dist = sum(r[0] for r in results)
+        count = sum(r[1] for r in results)
         avg_shortest_path_topo = total_dist / count if count > 0 else None
         logging.info("Average shortest path length (topological) calculated")
     except Exception as e:
@@ -667,31 +746,35 @@ def calculate_global_parameters(
         )
 
     undirected_subgraph = graph.to_undirected().subgraph(largest_cc)
+    n_jobs = os.cpu_count()
 
     try:
-        avg_shortest_path_length = nx.average_shortest_path_length(
+        logging.info(f"Computing avg shortest path (physical) with {n_jobs} workers...")
+        avg_shortest_path_length = _parallel_avg_shortest_path(
             undirected_subgraph, weight="length"
         )
         logging.info("Average shortest path length (physical) calculated")
-    except nx.NetworkXError:
+    except Exception as e:
         avg_shortest_path_length = None
-        logging.warning("Could not calculate average shortest path length (physical)")
+        logging.warning(f"Could not calculate average shortest path length (physical): {e}")
 
     try:
-        avg_shortest_path_eucl = nx.average_shortest_path_length(
+        logging.info(f"Computing avg shortest path (Euclidean) with {n_jobs} workers...")
+        avg_shortest_path_eucl = _parallel_avg_shortest_path(
             undirected_subgraph, weight="l_eucl"
         )
         logging.info("Average shortest path length (Euclidean) calculated")
-    except nx.NetworkXError:
+    except Exception as e:
         avg_shortest_path_eucl = None
-        logging.warning("Could not calculate average shortest path length (Euclidean)")
+        logging.warning(f"Could not calculate average shortest path length (Euclidean): {e}")
 
     try:
-        avg_shortest_path_manh = nx.average_shortest_path_length(
+        logging.info(f"Computing avg shortest path (Manhattan) with {n_jobs} workers...")
+        avg_shortest_path_manh = _parallel_avg_shortest_path(
             undirected_subgraph, weight="l_manh"
         )
         logging.info("Average shortest path length (Manhattan) calculated")
-    except nx.NetworkXError:
+    except Exception as e:
         avg_shortest_path_manh = None
         logging.warning("Could not calculate average shortest path length (Manhattan)")
 
