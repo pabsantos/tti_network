@@ -1022,6 +1022,8 @@ def main():
     node_params = calculate_node_parameters(graph)
     edge_params = calculate_edge_parameters(graph)
 
+    global_params = calculate_global_parameters(graph, node_params, edge_params)
+
     node_vuln, edge_vuln = calculate_vulnerability_near_station(
         graph, od_zones_filtered, PATH_STATIONS, 413
     )
@@ -1031,8 +1033,6 @@ def main():
     edge_params["v_ij"] = edge_params["v_ij"].fillna(0.0)
 
     graph = add_parameters_to_graph(graph, node_params, edge_params)
-
-    global_params = calculate_global_parameters(graph, node_params, edge_params)
     nodes_gdf, edges_gdf = graph_to_spatial_objects(graph)
 
     output_dir = Path("data/test") if TEST_RUN else Path("data/output")
