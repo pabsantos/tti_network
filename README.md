@@ -1,23 +1,25 @@
 # TTI Network Analysis
 
-Geospatial network analysis project for the Tamanduateí basin (TTI). This project loads spatial data, filters intersecting zones, downloads road network data from OpenStreetMap, and calculates various network parameters.
+Geospatial network analysis project for the Tamanduateí basin (TTI). This project loads spatial data, filters intersecting zones, downloads road network data from OpenStreetMap, and calculates various network parameters including vulnerability analysis near hydrological stations.
 
 ## Features
 
 - Load and filter origin-destination (OD) zones that intersect with the Tamanduateí basin
 - Download road network data from OpenStreetMap using OSMnx
 - Calculate network parameters:
-  - Node parameters: degree, clustering coefficient, betweenness centrality, average edge length
+  - Node parameters: degree, clustering coefficient, betweenness centrality, average edge length, vulnerability
   - Edge parameters: topological/euclidean/manhattan distances, physical length, edge betweenness centrality, vulnerability
-  - Global parameters: network size, averages, maximums, diameter, shortest paths
+  - Global parameters: network size, averages, maximums, diameter, shortest paths, theoretical random graph comparisons
+- **Vulnerability analysis** near hydrological stations using BFS-based global efficiency
 - **High-performance computing** using NetworKit (C++ backend) for graph algorithms
 - **Parallel processing** using joblib for CPU-intensive operations
+- Memory-efficient BFS-based algorithms for large graphs
 - Automatic logging to `log/` directory with timestamps
 - Export results in multiple formats (GeoPackage, GraphML, text)
 
 ## Requirements
 
-- Python 3.13+
+- Python 3.11+
 - uv package manager
 - Docker (optional, for containerized execution)
 
@@ -85,9 +87,10 @@ When `TEST_RUN = False`, results are saved to `data/output/`
 
 ## Input Data
 
-Place your input shapefiles in:
+Place your input files in:
 - `data/raw/tti_shape/Microbacias_Tamanduatei.shp` - Basin boundaries
 - `data/raw/od_zones/Zonas_2023.shp` - Origin-destination zones
+- `data/raw/stations.geojson` - Hydrological stations (with `posto` field for station ID)
 
 ## Output Files
 
@@ -115,6 +118,7 @@ The docker-compose configuration mounts the following volumes:
 - `c_i`: Clustering coefficient of node i
 - `b_i`: Betweenness centrality of node i
 - `avg_l_i`: Average length of edges connected to node i
+- `v_i`: Node vulnerability (efficiency drop when node is isolated)
 
 ### Edge Parameters
 - `l_topo`: Topological distance (number of edges in shortest path)
@@ -132,10 +136,11 @@ The docker-compose configuration mounts the following volumes:
 - `<l_topo>`, `<l_eucl>`, `<l_manh>`, `<length>`: Average distances
 - `D`: Network diameter
 - Average shortest path lengths (topological, physical, euclidean, manhattan)
+- Theoretical random graph G(N,p) parameters: `p`, `k*`, `c*`, `l*`
 
 ## Performance
 
-All graph computations use **NetworKit** (C++ backend), providing ~50x speedup over pure NetworkX.
+All graph computations use **NetworKit** (C++ backend), providing significant speedup over pure NetworkX.
 
 ### Optimized Operations
 
@@ -145,10 +150,16 @@ All graph computations use **NetworKit** (C++ backend), providing ~50x speedup o
 | Edge betweenness centrality | `nk.centrality.Betweenness(computeEdgeCentrality=True)` |
 | Clustering coefficient | `nk.centrality.LocalClusteringCoefficient` |
 | Diameter | `nk.distance.Diameter` |
-| All-Pairs Shortest Paths | `nk.distance.APSP` |
+| Global efficiency | BFS-based computation (`nk.distance.BFS`) |
+| Average shortest path | Parallel BFS across all nodes |
+
+### Memory-Efficient Algorithms
+
+- **BFS-based efficiency**: Uses O(N) memory per source instead of O(N^2) for full APSP matrix
+- **Incremental vulnerability**: Computes efficiency change for each edge/node removal independently
 
 ### Parallel Processing
 
-- **Vulnerability computation**: Uses `joblib` to parallelize across edges, with each worker computing APSP internally via NetworKit
-- **Memory-aware parallelization**: Number of workers is automatically limited based on available system RAM (each APSP matrix requires O(N^2) memory)
-- **APSP (All-Pairs Shortest Paths)**: Used for efficiency calculations and average shortest path computation when RAM permits
+- **Vulnerability computation**: Uses `joblib` to parallelize across nodes/edges near hydrological stations
+- **Average shortest path**: Parallel Dijkstra for weighted path calculations
+- **BFS distances**: Parallel BFS from all source nodes for topological distances

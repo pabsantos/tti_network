@@ -8,7 +8,7 @@ This is a geospatial network analysis project focused on the Tamanduateí basin 
 
 ## Development Setup
 
-This project uses `uv` as the Python package manager. Python 3.13+ is required.
+This project uses `uv` as the Python package manager. Python 3.11+ is required.
 
 **Install dependencies:**
 ```bash
@@ -30,7 +30,9 @@ The main pipeline in `main.py` follows this sequence:
 2. **CRS alignment**: Ensures both GeoDataFrames use the same coordinate reference system
 3. **Spatial filtering**: Creates a union of basin geometries and filters OD zones that intersect with the basin
 4. **Network download**: Downloads road network from OSM using the filtered zones as boundary (converted to CRS 4326, validated, and buffered)
-5. **Network analysis**: Returns the filtered zones and road network graph (NetworkX MultiDiGraph)
+5. **Parameter calculation**: Computes node and edge parameters using NetworKit
+6. **Vulnerability analysis**: Calculates node/edge vulnerability near hydrological stations using BFS-based global efficiency
+7. **Output generation**: Exports results as GeoPackage, GraphML, and text files
 
 ### Key Functions
 
@@ -39,14 +41,22 @@ The main pipeline in `main.py` follows this sequence:
 - `create_basin_union()`: Create single geometry from multiple basin polygons
 - `filter_intersecting_zones()`: Spatial filter using intersection test
 - `load_graph_from_zones()`: Download OSM road network using OSMnx, requires CRS 4326 for polygon input
+- `calculate_node_parameters()`: Compute degree, clustering, betweenness, avg edge length
+- `calculate_edge_parameters()`: Compute distance metrics and edge betweenness
+- `calculate_vulnerability_near_station()`: Compute node/edge vulnerability near a hydrological station
+- `calculate_global_parameters()`: Compute network-wide statistics and theoretical random graph parameters
+- `_calculate_efficiency_bfs()`: Memory-efficient global efficiency using incremental BFS
 - `setup_logging()`: Configure logging with timestamp format
 
 ### Directory Structure
 
 - `data/raw/tti_shape/`: Tamanduateí basin shapefiles
 - `data/raw/od_zones/`: Origin-destination zone shapefiles
-- `data/output/`: Output directory for processed data
+- `data/raw/stations.geojson`: Hydrological stations with `posto` field for station ID
+- `data/output/`: Output directory for full production runs
+- `data/test/`: Output directory for test runs (when `TEST_RUN = True`)
 - `cache/`: OSMnx automatically caches downloaded network data here
+- `log/`: Timestamped log files
 
 ### Key Dependencies
 
@@ -56,7 +66,9 @@ The main pipeline in `main.py` follows this sequence:
 - **networkit**: High-performance graph algorithms (C++ backend)
 - **joblib**: Parallel processing for CPU-intensive computations
 - **pandas**: Tabular data operations
-- **matplotlib**: Visualization (currently commented out in main)
+- **pyproj**: Geodesic distance calculations (WGS84 ellipsoid)
+- **numpy**: Numerical operations
+- **matplotlib**: Visualization (optional, for `plot_graph()`)
 
 ## Known Patterns
 
@@ -68,30 +80,7 @@ The main pipeline in `main.py` follows this sequence:
 
 ## Performance Optimization
 
-The project supports multiple acceleration backends with automatic priority:
-
-1. **GPU (nx-cugraph)** - Fastest, auto-detected via `setup_gpu()`
-2. **NetworKit (CPU)** - Fast C++ backend
-3. **NetworkX + joblib (CPU)** - Fallback
-
-### GPU Acceleration (nx-cugraph)
-
-When NVIDIA GPU is available, install with CUDA support:
-
-```bash
-uv sync --extra cuda
-```
-
-The code automatically detects and uses GPU via the `GPU_AVAILABLE` global variable:
-
-```python
-if GPU_AVAILABLE:
-    # Uses NetworkX with nx-cugraph backend (GPU)
-    betweenness = nx.betweenness_centrality(graph)
-elif use_networkit:
-    # Uses NetworKit (CPU, C++)
-    betweenness = _compute_betweenness_networkit(graph)
-```
+The project uses NetworKit (C++ backend) for all computationally intensive graph algorithms, with parallel processing via joblib for embarrassingly parallel tasks.
 
 ### When to use NetworKit vs NetworkX
 
@@ -122,15 +111,45 @@ def _nx_to_nk_graph(graph: nx.MultiDiGraph) -> tuple[nk.Graph, dict, dict]:
     return nk_graph, node_to_idx, idx_to_node
 ```
 
+### Memory-efficient BFS algorithms
+
+For large graphs, use BFS-based efficiency calculation instead of full APSP matrix:
+
+```python
+def _calculate_efficiency_bfs(nk_graph: nk.Graph, sample_size: int = None) -> float:
+    """Uses O(N) memory per source instead of O(N^2) for APSP."""
+    n = nk_graph.numberOfNodes()
+    total_efficiency = 0.0
+    for source in range(n):
+        bfs = nk.distance.BFS(nk_graph, source)
+        bfs.run()
+        distances = bfs.getDistances()
+        for target, dist in enumerate(distances):
+            if target != source and 0 < dist < 1e308:
+                total_efficiency += 1.0 / dist
+    return total_efficiency / (n * (n - 1))
+```
+
 ### Parallel processing
 
-Use `joblib.Parallel` for embarrassingly parallel tasks like edge vulnerability:
+Use `joblib.Parallel` for embarrassingly parallel tasks like vulnerability computation:
 
 ```python
 from joblib import Parallel, delayed
 
 results = Parallel(n_jobs=os.cpu_count(), verbose=10)(
-    delayed(compute_function)(args) for args in items
+    delayed(_compute_vulnerability_bfs)(nk_graph, u_idx, v_idx, base_efficiency)
+    for u, v, _ in edges_in_zones
+)
+```
+
+### Vulnerability near stations
+
+Vulnerability is computed only for nodes/edges within OD zones that intersect a buffer around a hydrological station:
+
+```python
+node_vuln, edge_vuln = calculate_vulnerability_near_station(
+    graph, od_zones_filtered, PATH_STATIONS, station_id=413, radius_m=1000
 )
 ```
 
@@ -141,5 +160,3 @@ results = Parallel(n_jobs=os.cpu_count(), verbose=10)(
 - Always document methods using docstrings
 - Prefer NetworKit over NetworkX for large graph computations
 - Use parallel processing for independent, CPU-intensive operations
-
-
