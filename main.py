@@ -1007,6 +1007,7 @@ def main():
 
     TEST_RUN = True
     TEST_DISTRICTS = [80, 67]
+    CALC_VULNERABILITY = True
 
     PATH_TTI_SHAPE = "data/raw/tti_shape/Microbacias_Tamanduatei.shp"
     PATH_OD_ZONES = "data/raw/od_zones/Zonas_2023.shp"
@@ -1031,13 +1032,18 @@ def main():
 
     global_params = calculate_global_parameters(graph, node_params, edge_params)
 
-    node_vuln, edge_vuln = calculate_vulnerability_near_station(
-        graph, od_zones_filtered, PATH_STATIONS, 413
-    )
-    node_params = node_params.merge(node_vuln, on="node", how="left")
-    node_params["v_i"] = node_params["v_i"].fillna(0.0)
-    edge_params = edge_params.merge(edge_vuln, on=["u", "v", "key"], how="left")
-    edge_params["v_ij"] = edge_params["v_ij"].fillna(0.0)
+    if CALC_VULNERABILITY:
+        node_vuln, edge_vuln = calculate_vulnerability_near_station(
+            graph, od_zones_filtered, PATH_STATIONS, 413
+        )
+        node_params = node_params.merge(node_vuln, on="node", how="left")
+        node_params["v_i"] = node_params["v_i"].fillna(0.0)
+        edge_params = edge_params.merge(edge_vuln, on=["u", "v", "key"], how="left")
+        edge_params["v_ij"] = edge_params["v_ij"].fillna(0.0)
+    else:
+        logging.info("Skipping vulnerability calculation (CALC_VULNERABILITY = False)")
+        node_params["v_i"] = 0.0
+        edge_params["v_ij"] = 0.0
 
     graph = add_parameters_to_graph(graph, node_params, edge_params)
     nodes_gdf, edges_gdf = graph_to_spatial_objects(graph)
