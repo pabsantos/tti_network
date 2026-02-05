@@ -745,6 +745,13 @@ def calculate_global_parameters(
             f"Could not calculate average shortest path length (topological): {e}"
         )
 
+    logging.info("Setting edge distance attributes on graph for weighted shortest paths...")
+    for _, row in edge_data.iterrows():
+        u, v, key = row["u"], row["v"], int(row["key"])
+        if graph.has_edge(u, v, key):
+            graph.edges[u, v, key]["l_eucl"] = float(row["l_eucl"])
+            graph.edges[u, v, key]["l_manh"] = float(row["l_manh"])
+
     undirected_subgraph = graph.to_undirected().subgraph(largest_cc)
     n_jobs = os.cpu_count()
 
