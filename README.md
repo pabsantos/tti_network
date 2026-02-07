@@ -17,6 +17,10 @@ Geospatial network analysis project for the Tamanduateí basin (TTI). This proje
 - Automatic logging to `log/` directory with timestamps
 - Export results in multiple formats (GeoPackage, GraphML, text)
 
+## License
+
+This project is licensed under the GNU General Public License v3 (GPLv3). See the [LICENSE](LICENSE) file for details.
+
 ## Requirements
 
 - Python 3.11+
@@ -84,6 +88,16 @@ TEST_DISTRICTS = [80, 67]  # Districts to include in test
 
 When `TEST_RUN = True`, results are saved to `data/test/`
 When `TEST_RUN = False`, results are saved to `data/output/`
+
+### Vulnerability Calculation
+
+Vulnerability analysis can be toggled in `main.py`:
+
+```python
+CALC_VULNERABILITY = True  # Enable/disable vulnerability computation
+```
+
+When enabled, node and edge vulnerability are computed near hydrological station 413 using BFS-based global efficiency. This is the most computationally expensive step. When disabled, vulnerability values default to 0.
 
 ## Input Data
 

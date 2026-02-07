@@ -31,11 +31,13 @@ The main pipeline in `main.py` follows this sequence:
 3. **Spatial filtering**: Creates a union of basin geometries and filters OD zones that intersect with the basin
 4. **Network download**: Downloads road network from OSM using the filtered zones as boundary (converted to CRS 4326, validated, and buffered)
 5. **Parameter calculation**: Computes node and edge parameters using NetworKit
-6. **Vulnerability analysis**: Calculates node/edge vulnerability near hydrological stations using BFS-based global efficiency
+6. **Vulnerability analysis**: Calculates node/edge vulnerability near hydrological stations using BFS-based global efficiency (controlled by `CALC_VULNERABILITY` flag)
 7. **Output generation**: Exports results as GeoPackage, GraphML, and text files
 
 ### Key Functions
 
+**Pipeline (public):**
+- `setup_logging()`: Configure logging with timestamp format and file output
 - `load_tti_basin()` / `load_od_zones()`: Load shapefiles into GeoDataFrames
 - `ensure_same_crs()`: Handle CRS mismatches by reprojecting or setting CRS
 - `create_basin_union()`: Create single geometry from multiple basin polygons
@@ -45,8 +47,23 @@ The main pipeline in `main.py` follows this sequence:
 - `calculate_edge_parameters()`: Compute distance metrics and edge betweenness
 - `calculate_vulnerability_near_station()`: Compute node/edge vulnerability near a hydrological station
 - `calculate_global_parameters()`: Compute network-wide statistics and theoretical random graph parameters
-- `_calculate_efficiency_bfs()`: Memory-efficient global efficiency using incremental BFS
-- `setup_logging()`: Configure logging with timestamp format
+- `add_parameters_to_graph()`: Add calculated parameters as node/edge attributes to graph
+- `graph_to_spatial_objects()`: Convert graph nodes/edges to GeoDataFrames via OSMnx
+- `save_results_txt()`: Write global and average parameters to a text file
+- `plot_graph()`: Visualize the road network graph using OSMnx
+
+**Internal helpers (private):**
+- `_nx_to_nk_graph()`: Convert NetworkX MultiDiGraph to NetworKit undirected Graph
+- `_compute_clustering_networkit()`: Compute local clustering coefficient via NetworKit
+- `_compute_betweenness_networkit()`: Compute node betweenness centrality via NetworKit
+- `_compute_edge_betweenness_networkit()`: Compute edge betweenness centrality via NetworKit
+- `_calculate_efficiency_bfs()`: Memory-efficient global efficiency using incremental BFS (supports parallel and sampling)
+- `_efficiency_for_source()`: Single-source efficiency contribution via BFS
+- `_compute_vulnerability_bfs()`: Edge vulnerability via graph copy with edge removal
+- `_compute_node_vulnerability_bfs()`: Node vulnerability via graph copy with node isolation
+- `_dijkstra_sum_for_source()` / `_parallel_avg_shortest_path()`: Weighted shortest path calculations using NetworkX Dijkstra
+- `_bfs_distances_for_source()`: Sum of BFS distances from a single source (used in parallel avg shortest path)
+- `_get_available_ram_gb()`: Detect available system RAM
 
 ### Directory Structure
 
@@ -67,6 +84,7 @@ The main pipeline in `main.py` follows this sequence:
 - **joblib**: Parallel processing for CPU-intensive computations
 - **pandas**: Tabular data operations
 - **pyproj**: Geodesic distance calculations (WGS84 ellipsoid)
+- **shapely**: Geometric operations (Point creation for node spatial queries)
 - **numpy**: Numerical operations
 - **matplotlib**: Visualization (optional, for `plot_graph()`)
 
@@ -77,6 +95,8 @@ The main pipeline in `main.py` follows this sequence:
 - Geometry operations include validation (`.make_valid()`) and buffering to handle edge cases
 - OSMnx downloads are cached automatically to avoid repeated API calls
 - Graph is currently set to `network_type="drive"` for road networks
+- `CALC_VULNERABILITY` flag in `main()` controls whether vulnerability is computed (most expensive step)
+- When vulnerability is disabled, `v_i` and `v_ij` default to 0.0
 
 ## Performance Optimization
 
