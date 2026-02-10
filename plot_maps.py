@@ -1,11 +1,30 @@
 import logging
-import math
 from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
 import pydeck as pdk
 from matplotlib import colormaps
+
+
+def load_edges(path: Path) -> gpd.GeoDataFrame:
+    """Load edges GeoPackage and extract path coordinates.
+
+    Args:
+        path: Path to the edges GeoPackage file.
+
+    Returns:
+        GeoDataFrame in EPSG:4326 with a 'path' column of coordinate lists.
+    """
+    logging.info(f"Loading edges from {path}...")
+    gdf = gpd.read_file(path)
+
+    if gdf.crs and gdf.crs.to_epsg() != 4326:
+        gdf = gdf.to_crs(epsg=4326)
+
+    gdf["path"] = gdf.geometry.apply(lambda g: list(g.coords))
+    logging.info(f"Loaded {len(gdf)} edges")
+    return gdf
 
 
 def load_nodes(path: Path) -> gpd.GeoDataFrame:
@@ -63,7 +82,9 @@ def _value_to_rgb(normalized: np.ndarray) -> list[list[int]]:
     return colors
 
 
-def _get_normalization_bounds(gdf: gpd.GeoDataFrame, column: str) -> tuple[float, float]:
+def _get_normalization_bounds(
+    gdf: gpd.GeoDataFrame, column: str
+) -> tuple[float, float]:
     """Get normalization bounds for a variable using the appropriate strategy.
 
     Args:
@@ -81,8 +102,10 @@ def _get_normalization_bounds(gdf: gpd.GeoDataFrame, column: str) -> tuple[float
         return 0.0, 1.0
     elif column in ("b_i", "avg_l_i"):
         return float(values.min()), float(np.percentile(values.dropna(), 99))
-    elif column == "v_i":
+    elif column in ("v_i", "v_ij"):
         return 0.0, float(values.max()) if values.max() > 0 else 1.0
+    elif column == "e_ij":
+        return float(values.min()), float(np.percentile(values.dropna(), 99))
     else:
         return float(values.min()), float(values.max())
 
@@ -102,35 +125,22 @@ def _plasma_css_gradient(n_stops: int = 10) -> str:
         t = i / (n_stops - 1)
         r, g, b, _ = cmap(t)
         pct = int(t * 100)
-        stops.append(f"rgb({int(r*255)},{int(g*255)},{int(b*255)}) {pct}%")
+        stops.append(f"rgb({int(r * 255)},{int(g * 255)},{int(b * 255)}) {pct}%")
     return f"linear-gradient(to top, {', '.join(stops)})"
 
 
-def _build_overlay_html(
-    label: str, vmin: float, vmax: float, center_lat: float
-) -> str:
-    """Build HTML/CSS overlay string with legend, north arrow, and scale bar.
+def _build_overlay_html(label: str, vmin: float, vmax: float) -> str:
+    """Build HTML/CSS overlay string with legend and north arrow.
 
     Args:
         label: Human-readable variable name for the legend title.
         vmin: Minimum value of the color scale.
         vmax: Maximum value of the color scale.
-        center_lat: Center latitude for scale bar calculation.
 
     Returns:
         HTML string to inject before </body>.
     """
     gradient = _plasma_css_gradient()
-
-    zoom = 11
-    meters_per_pixel = 156543.03 * math.cos(math.radians(center_lat)) / (2 ** zoom)
-    round_distances = [100, 200, 500, 1000, 2000, 5000, 10000]
-    best_dist = round_distances[0]
-    for d in round_distances:
-        if d / meters_per_pixel <= 150:
-            best_dist = d
-    bar_width_px = int(best_dist / meters_per_pixel)
-    dist_label = f"{best_dist} m" if best_dist < 1000 else f"{best_dist // 1000} km"
 
     vmin_str = f"{vmin:.4g}"
     vmax_str = f"{vmax:.4g}"
@@ -166,18 +176,6 @@ def _build_overlay_html(
     <text x="15" y="14" text-anchor="middle" fill="black" font-size="10" font-weight="bold">N</text>
   </svg>
 </div>
-
-<div id="scale-bar" style="
-    position:absolute; bottom:30px; left:15px; z-index:999;
-    background:rgba(0,0,0,0.7); padding:8px 12px; border-radius:6px;
-    color:white; font-family:Arial,sans-serif; font-size:11px;
-    pointer-events:none;">
-  <div style="
-      width:{bar_width_px}px; height:4px;
-      background:white; border-radius:1px;">
-  </div>
-  <div style="margin-top:4px; text-align:center;">{dist_label}</div>
-</div>
 """
 
 
@@ -200,8 +198,9 @@ def create_map(
     normalized = _normalize_values(gdf[column].values, vmin, vmax)
     colors = _value_to_rgb(normalized)
 
-    df = gdf[["lon", "lat", column]].copy()
+    df = gdf[["osmid", "lon", "lat", column]].copy()
     df = df.rename(columns={column: "value"})
+    df["value"] = df["value"].round(4)
     df["color"] = colors
 
     view_state = pdk.ViewState(
@@ -235,15 +234,76 @@ def create_map(
     return deck, vmin, vmax
 
 
+def create_edge_map(
+    gdf: gpd.GeoDataFrame, column: str, label: str
+) -> tuple[pdk.Deck, float, float]:
+    """Create a pydeck map for a given edge parameter.
+
+    Args:
+        gdf: GeoDataFrame with edge data including path coordinates.
+        column: Column name to visualize.
+        label: Human-readable label for the tooltip.
+
+    Returns:
+        Tuple of (pydeck Deck object, vmin, vmax).
+    """
+    logging.info(f"Creating edge map for {column} ({label})...")
+
+    vmin, vmax = _get_normalization_bounds(gdf, column)
+    normalized = _normalize_values(gdf[column].values, vmin, vmax)
+    colors = _value_to_rgb(normalized)
+
+    df = gdf[["osmid", "name", "lanes", "path", column]].copy()
+    df["name"] = df["name"].fillna("N/A")
+    df["lanes"] = df["lanes"].fillna("N/A")
+    df = df.rename(columns={column: "value"})
+    df["value"] = df["value"].round(4)
+    df["color"] = colors
+
+    bounds = gdf.total_bounds
+    center_lon = (bounds[0] + bounds[2]) / 2
+    center_lat = (bounds[1] + bounds[3]) / 2
+
+    view_state = pdk.ViewState(
+        latitude=center_lat,
+        longitude=center_lon,
+        zoom=11,
+    )
+
+    layer = pdk.Layer(
+        "PathLayer",
+        data=df,
+        get_path="path",
+        get_color="color",
+        width_min_pixels=1,
+        width_max_pixels=3,
+        pickable=True,
+    )
+
+    tooltip = {
+        "text": (
+            f"OSMID: {{osmid}}\nName: {{name}}\nLanes: {{lanes}}\n{label}: {{value}}"
+        ),
+    }
+
+    deck = pdk.Deck(
+        layers=[layer],
+        initial_view_state=view_state,
+        map_style=pdk.map_styles.DARK,
+        tooltip=tooltip,
+    )
+
+    return deck, vmin, vmax
+
+
 def save_map(
     deck: pdk.Deck,
     output_path: Path,
     label: str,
     vmin: float,
     vmax: float,
-    center_lat: float,
 ) -> None:
-    """Save a pydeck Deck to an HTML file with legend, north arrow, and scale bar.
+    """Save a pydeck Deck to an HTML file with legend and north arrow.
 
     Args:
         deck: pydeck Deck object.
@@ -251,17 +311,16 @@ def save_map(
         label: Variable label for the legend.
         vmin: Minimum value of the color scale.
         vmax: Maximum value of the color scale.
-        center_lat: Center latitude for scale bar calculation.
     """
     html_str = deck.to_html(as_string=True)
-    overlay_html = _build_overlay_html(label, vmin, vmax, center_lat)
+    overlay_html = _build_overlay_html(label, vmin, vmax)
     html_str = html_str.replace("</body>", overlay_html + "</body>")
     Path(output_path).write_text(html_str)
     logging.info(f"Map saved to {output_path}")
 
 
 def main():
-    """Generate interactive pydeck maps for each node parameter."""
+    """Generate interactive pydeck maps for node and edge parameters."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
@@ -269,12 +328,14 @@ def main():
     )
 
     nodes_path = Path("data/output/nodes.gpkg")
+    edges_path = Path("data/output/edges.gpkg")
     maps_dir = Path("maps")
     maps_dir.mkdir(exist_ok=True)
 
-    gdf = load_nodes(nodes_path)
+    nodes_gdf = load_nodes(nodes_path)
+    edges_gdf = load_edges(edges_path)
 
-    variables = [
+    node_variables = [
         ("k_i", "Degree"),
         ("c_i", "Clustering Coefficient"),
         ("b_i", "Betweenness Centrality"),
@@ -282,13 +343,34 @@ def main():
         ("v_i", "Vulnerability"),
     ]
 
-    for column, label in variables:
-        if column not in gdf.columns:
+    for column, label in node_variables:
+        if column not in nodes_gdf.columns:
             logging.warning(f"Column {column} not found in nodes, skipping")
             continue
-        deck, vmin, vmax = create_map(gdf, column, label)
+
+        plot_gdf = (
+            nodes_gdf[nodes_gdf[column] > 0].copy() if column == "v_i" else nodes_gdf
+        )
+        deck, vmin, vmax = create_map(plot_gdf, column, label)
         output_path = maps_dir / f"map_{column}.html"
-        save_map(deck, output_path, label, vmin, vmax, gdf["lat"].mean())
+        save_map(deck, output_path, label, vmin, vmax)
+
+    edge_variables = [
+        ("e_ij", "Edge Betweenness"),
+        ("v_ij", "Edge Vulnerability"),
+    ]
+
+    for column, label in edge_variables:
+        if column not in edges_gdf.columns:
+            logging.warning(f"Column {column} not found in edges, skipping")
+            continue
+
+        plot_gdf = (
+            edges_gdf[edges_gdf[column] > 0].copy() if column == "v_ij" else edges_gdf
+        )
+        deck, vmin, vmax = create_edge_map(plot_gdf, column, label)
+        output_path = maps_dir / f"map_{column}.html"
+        save_map(deck, output_path, label, vmin, vmax)
 
     logging.info("All maps generated successfully")
 
