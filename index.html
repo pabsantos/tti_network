@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tamanduateí Network Analysis</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reset.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/black.css">
+  <style>
+    .reveal table {
+      margin: 0 auto;
+      border-collapse: collapse;
+      font-size: 0.7em;
+    }
+    .reveal table th,
+    .reveal table td {
+      border: 1px solid #555;
+      padding: 6px 16px;
+      text-align: left;
+    }
+    .reveal table th {
+      background: #333;
+    }
+    .reveal h2 {
+      font-size: 1.0em;
+      margin-bottom: 0.3em;
+    }
+    .reveal .map-slide iframe {
+      width: 95%;
+      height: 80vh;
+      border: none;
+      border-radius: 4px;
+    }
+    .reveal .title-slide h1 {
+      font-size: 2em;
+    }
+    .reveal .title-slide p {
+      font-size: 0.8em;
+      color: #aaa;
+    }
+    .reveal section {
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="reveal">
+    <div class="slides">
+
+      <!-- Slide 1: Title -->
+      <section class="title-slide">
+        <h1>Tamanduateí Network Analysis</h1>
+        <p>Road network vulnerability in the Tamanduateí basin</p>
+        <p>Pedro Borges — pedro.borges@inpe.br</p>
+        <p>February 10, 2026</p>
+      </section>
+
+      <!-- Slide 2: Network Size -->
+      <section>
+        <h2>Global Network Parameters</h2>
+        <table>
+          <tr><th>Parameter</th><th>Value</th></tr>
+          <tr><td>Number of nodes (N)</td><td>54,557</td></tr>
+          <tr><td>Number of edges (L)</td><td>130,493</td></tr>
+        </table>
+      </section>
+
+      <!-- Slide 3: Average Parameters -->
+      <section>
+        <h2>Average Parameters</h2>
+        <table>
+          <tr><th>Parameter</th><th>Value</th></tr>
+          <tr><td>Average degree &lt;k&gt;</td><td>4.7837</td></tr>
+          <tr><td>Average clustering coefficient &lt;c&gt;</td><td>0.0648</td></tr>
+          <tr><td>Average Euclidean distance &lt;l<sub>eucl</sub>&gt;</td><td>93.07 m</td></tr>
+          <tr><td>Average Manhattan distance &lt;l<sub>manh</sub>&gt;</td><td>117.83 m</td></tr>
+          <tr><td>Average physical length &lt;length&gt;</td><td>97.81 m</td></tr>
+        </table>
+      </section>
+
+      <!-- Slide 4: Average Shortest Path Lengths -->
+      <section>
+        <h2>Average Shortest Path Lengths</h2>
+        <table>
+          <tr><th>Metric</th><th>Value</th></tr>
+          <tr><td>Topological (edges)</td><td>76.51</td></tr>
+          <tr><td>Physical length</td><td>14,359.85 m</td></tr>
+          <tr><td>Euclidean distance</td><td>14,056.94 m</td></tr>
+          <tr><td>Manhattan distance</td><td>17,592.42 m</td></tr>
+        </table>
+      </section>
+
+      <!-- Slide 5: Maximum Parameters -->
+      <section>
+        <h2>Maximum Parameters</h2>
+        <table>
+          <tr><th>Parameter</th><th>Value</th></tr>
+          <tr><td>Max Euclidean distance</td><td>9,131.49 m</td></tr>
+          <tr><td>Max Manhattan distance</td><td>12,709.69 m</td></tr>
+          <tr><td>Max physical length</td><td>10,475.39 m</td></tr>
+          <tr><td>Diameter (D)</td><td>219</td></tr>
+        </table>
+      </section>
+
+      <!-- Slide 4: Random Graph Comparison -->
+      <section>
+        <h2>Random Graph Comparison G(N, p)</h2>
+        <table>
+          <tr><th>Parameter</th><th>Network</th><th>G(N, p)</th></tr>
+          <tr><td>Degree &lt;k&gt;</td><td>4.7837</td><td>k* = 4.7837</td></tr>
+          <tr><td>Clustering &lt;c&gt;</td><td>0.0648</td><td>c* = 0.000088</td></tr>
+          <tr><td>Avg shortest path</td><td>76.51</td><td>l* = 6.97</td></tr>
+        </table>
+        <br>
+        <p style="font-size:0.65em; color:#aaa;">
+          p = 2L / N(N&minus;1) = 0.000088<br>
+          High clustering + long path &rarr; spatial network characteristics
+        </p>
+      </section>
+
+      <!-- Slide 5: Degree Map -->
+      <section class="map-slide">
+        <h2>Node Degree (k<sub>i</sub>)</h2>
+        <iframe src="maps/map_k_i.html" loading="lazy"></iframe>
+      </section>
+
+      <!-- Slide 6: Clustering Map -->
+      <section class="map-slide">
+        <h2>Clustering Coefficient (c<sub>i</sub>)</h2>
+        <iframe src="maps/map_c_i.html" loading="lazy"></iframe>
+      </section>
+
+      <!-- Slide 7: Betweenness Map -->
+      <section class="map-slide">
+        <h2>Betweenness Centrality (b<sub>i</sub>)</h2>
+        <iframe src="maps/map_b_i.html" loading="lazy"></iframe>
+      </section>
+
+      <!-- Slide 8: Avg Edge Length Map -->
+      <section class="map-slide">
+        <h2>Average Edge Length (avg l<sub>i</sub>)</h2>
+        <iframe src="maps/map_avg_l_i.html" loading="lazy"></iframe>
+      </section>
+
+      <!-- Slide 9: Node Vulnerability Map -->
+      <section class="map-slide">
+        <h2>Node Vulnerability (v<sub>i</sub>)</h2>
+        <iframe src="maps/map_v_i.html" loading="lazy"></iframe>
+      </section>
+
+      <!-- Slide 10: Edge Betweenness Map -->
+      <section class="map-slide">
+        <h2>Edge Betweenness (e<sub>ij</sub>)</h2>
+        <iframe src="maps/map_e_ij.html" loading="lazy"></iframe>
+      </section>
+
+      <!-- Slide 11: Edge Vulnerability Map -->
+      <section class="map-slide">
+        <h2>Edge Vulnerability (v<sub>ij</sub>)</h2>
+        <iframe src="maps/map_v_ij.html" loading="lazy"></iframe>
+      </section>
+
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
+  <script>
+    Reveal.initialize({
+      hash: true,
+      slideNumber: true,
+      width: 1280,
+      height: 720,
+      margin: 0.04,
+      transition: 'slide'
+    });
+  </script>
+</body>
+</html>
